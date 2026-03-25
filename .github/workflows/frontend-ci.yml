@@ -1,0 +1,93 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ["frontend/**", ".github/workflows/frontend-ci.yml"]
+  pull_request:
+    branches: [main, dev]
+    paths: ["frontend/**", ".github/workflows/frontend-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, Typecheck, Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.['format:check'] ? 0 : 1)"; then
+            npm run format:check
+          else
+            echo "No frontend format:check script found, skipping."
+          fi
+
+      - name: Lint
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.lint ? 0 : 1)"; then
+            npm run lint
+          else
+            echo "No frontend lint script found, skipping."
+          fi
+
+      - name: Type check
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)"; then
+            npm run typecheck
+          else
+            echo "No frontend typecheck script found, skipping."
+          fi
+
+      - name: Run tests
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test
+          else
+            echo "No frontend test script found, skipping."
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "No frontend build script found, skipping."
+          fi

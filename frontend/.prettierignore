@@ -1,0 +1,20 @@
+# Build output
+dist
+build
+coverage
+
+# Dependencies
+node_modules
+
+# Package manager
+package-lock.json
+
+# Auto-generated
+*.min.js
+*.min.css
+
+# IDE / env
+.vscode
+.idea
+.env
+.env.*

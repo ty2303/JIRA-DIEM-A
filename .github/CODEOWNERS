@@ -1,0 +1,8 @@
+# Default code owner for all files
+* @ty2303
+
+# Backend-specific ownership
+/backend/ @ty2303
+
+# Frontend-specific ownership
+/frontend/ @ty2303
