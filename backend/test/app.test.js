@@ -271,6 +271,30 @@ describe("Auth - local", () => {
 		});
 	});
 
+	test("POST /api/auth/google rejects missing credential", async () => {
+		await withServer(async (port) => {
+			const res = await fetch(`http://127.0.0.1:${port}/api/auth/google`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			});
+
+			assert.equal(res.status, 400);
+		});
+	});
+
+	test("POST /api/auth/google returns 503 when Google login is not configured", async () => {
+		await withServer(async (port) => {
+			const res = await fetch(`http://127.0.0.1:${port}/api/auth/google`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ credential: "fake-google-token" }),
+			});
+
+			assert.equal(res.status, 503);
+		});
+	});
+
 	test("POST /api/auth/forgot-password always returns 200", async () => {
 		await withServer(async (port) => {
 			const res = await fetch(`http://127.0.0.1:${port}/api/auth/forgot-password`, {

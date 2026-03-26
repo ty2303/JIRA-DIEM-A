@@ -46,7 +46,6 @@ function fileToDataUrl(file: File) {
   });
 }
 
-
 export function Component() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -679,7 +678,6 @@ export function Component() {
                 ))}
               </div>
             </div>
-
           </div>
 
           <div>

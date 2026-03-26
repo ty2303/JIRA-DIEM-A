@@ -9,6 +9,31 @@ import type { Product } from '@/types/product';
 
 const GUEST_WISHLIST_KEY = 'guest';
 
+const isProductArray = (value: unknown): value is Product[] =>
+  Array.isArray(value);
+
+const sanitizeItemsByOwner = (value: unknown): WishlistPersistedBuckets => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.entries(value).reduce<WishlistPersistedBuckets>(
+    (accumulator, [ownerKey, items]) => {
+      if (isProductArray(items)) {
+        accumulator[ownerKey] = items;
+      }
+
+      return accumulator;
+    },
+    {},
+  );
+};
+
+const sanitizeOwnerKey = (value: unknown) =>
+  typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : GUEST_WISHLIST_KEY;
+
 interface WishlistPersistedBuckets {
   [ownerKey: string]: Product[];
 }
@@ -238,16 +263,17 @@ export const useWishlistStore = create<WishlistState>()(
       }),
       merge: (persistedState, currentState) => {
         const persisted = (persistedState as Partial<WishlistState>) ?? {};
-        const itemsByOwner = persisted.itemsByOwner ?? {};
-        const currentOwnerKey =
-          persisted.currentOwnerKey ?? currentState.currentOwnerKey;
+        const itemsByOwner = sanitizeItemsByOwner(persisted.itemsByOwner);
+        const currentOwnerKey = sanitizeOwnerKey(
+          persisted.currentOwnerKey ?? currentState.currentOwnerKey,
+        );
+        const items = itemsByOwner[currentOwnerKey];
 
         return {
           ...currentState,
-          ...persisted,
           itemsByOwner,
           currentOwnerKey,
-          items: itemsByOwner[currentOwnerKey] ?? [],
+          items: isProductArray(items) ? items : [],
         };
       },
     },

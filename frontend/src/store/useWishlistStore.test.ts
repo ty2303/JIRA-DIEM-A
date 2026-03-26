@@ -27,25 +27,62 @@ const product: Product = {
   stock: 2,
 };
 
+const loadStores = async () => {
+  const { useAuthStore } = await import('@/store/useAuthStore');
+  const { useWishlistStore } = await import('@/store/useWishlistStore');
+
+  return { useAuthStore, useWishlistStore };
+};
+
+const resetAuthState = async () => {
+  const { useAuthStore } = await import('@/store/useAuthStore');
+
+  useAuthStore.setState({
+    token: null,
+    user: null,
+    isLoggedIn: false,
+    isAdmin: false,
+  });
+};
+
 describe('useWishlistStore', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     localStorage.clear();
 
-    const { useAuthStore } = await import('@/store/useAuthStore');
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useWishlistStore } = await loadStores();
 
-    useAuthStore.setState({
-      token: null,
-      user: null,
-      isLoggedIn: false,
-      isAdmin: false,
-    });
+    await resetAuthState();
     useWishlistStore.getState().reset();
   });
 
+  test('hydrates malformed persisted wishlist state into a safe empty array', async () => {
+    vi.resetModules();
+    localStorage.setItem(
+      'nebula-wishlist',
+      JSON.stringify({
+        state: {
+          itemsByOwner: {
+            guest: null,
+            broken: { id: 'not-an-array' },
+          },
+          currentOwnerKey: 'guest',
+        },
+        version: 2,
+      }),
+    );
+
+    await resetAuthState();
+
+    const { useWishlistStore } = await loadStores();
+
+    expect(useWishlistStore.getState().items).toEqual([]);
+    expect(() => useWishlistStore.getState().items.length).not.toThrow();
+    expect(useWishlistStore.getState().items.length).toBe(0);
+  });
+
   test('keeps wishlist local for guests without calling the API', async () => {
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useWishlistStore } = await loadStores();
 
     await useWishlistStore.getState().toggle(product);
 
@@ -54,8 +91,7 @@ describe('useWishlistStore', () => {
   });
 
   test('reverts optimistic updates when toggle fails for logged-in users', async () => {
-    const { useAuthStore } = await import('@/store/useAuthStore');
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useAuthStore, useWishlistStore } = await loadStores();
 
     useAuthStore.setState({
       token: 'demo-token',
@@ -79,8 +115,7 @@ describe('useWishlistStore', () => {
   });
 
   test('syncs guest wishlist into the signed-in user and clears the guest bucket', async () => {
-    const { useAuthStore } = await import('@/store/useAuthStore');
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useAuthStore, useWishlistStore } = await loadStores();
 
     await useWishlistStore.getState().toggle(product);
 
@@ -115,8 +150,7 @@ describe('useWishlistStore', () => {
   });
 
   test('switches between guest and user-specific wishlist buckets', async () => {
-    const { useAuthStore } = await import('@/store/useAuthStore');
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useAuthStore, useWishlistStore } = await loadStores();
 
     useWishlistStore.setState({
       items: [],
@@ -162,8 +196,7 @@ describe('useWishlistStore', () => {
   });
 
   test('restores items when clear fails for logged-in users', async () => {
-    const { useAuthStore } = await import('@/store/useAuthStore');
-    const { useWishlistStore } = await import('@/store/useWishlistStore');
+    const { useAuthStore, useWishlistStore } = await loadStores();
 
     useAuthStore.setState({
       token: 'demo-token',

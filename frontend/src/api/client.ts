@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ENDPOINTS } from '@/api/endpoints';
 import { useAuthStore } from '@/store/useAuthStore';
 
 const apiClient = axios.create({
@@ -23,11 +24,26 @@ apiClient.interceptors.request.use(
 // Response interceptor
 let isRefreshingRole = false;
 
+const AUTH_BYPASS_PATHS = [
+  ENDPOINTS.AUTH.LOGIN,
+  ENDPOINTS.AUTH.REGISTER,
+  ENDPOINTS.AUTH.GOOGLE,
+  ENDPOINTS.AUTH.FORGOT_PASSWORD,
+  ENDPOINTS.AUTH.RESET_PASSWORD,
+];
+
+const isAuthBypassRequest = (requestUrl?: string) =>
+  typeof requestUrl === 'string' &&
+  AUTH_BYPASS_PATHS.some((path) => requestUrl.includes(path));
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     // Handle global errors (401, 403, 500, etc.)
-    if (error.response?.status === 401) {
+    if (
+      error.response?.status === 401 &&
+      !isAuthBypassRequest(error.config?.url)
+    ) {
       useAuthStore.getState().logout();
       window.location.href = '/login';
     }
