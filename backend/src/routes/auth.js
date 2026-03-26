@@ -1,10 +1,74 @@
 import crypto from "node:crypto";
 import express from "express";
+import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/User.js";
 import { db, issueToken, sanitizeUser } from "../data/store.js";
 import { fail, ok } from "../lib/apiResponse.js";
 
 export const authRouter = express.Router();
+
+let cachedGoogleClientId = "";
+let cachedGoogleClient = null;
+
+function getGoogleVerifier() {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
+  if (!clientId) {
+    return null;
+  }
+
+  if (!cachedGoogleClient || cachedGoogleClientId !== clientId) {
+    cachedGoogleClient = new OAuth2Client(clientId);
+    cachedGoogleClientId = clientId;
+  }
+
+  return { clientId, client: cachedGoogleClient };
+}
+
+const GOOGLE_USERNAME_MAX_LENGTH = 30;
+
+function sanitizeUsernameSegment(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildGoogleUsernameSeed(payload) {
+  const emailLocalPart = typeof payload.email === "string" ? payload.email.split("@")[0] : "";
+  const profileName = typeof payload.name === "string" ? payload.name : "";
+
+  const sanitizedFromName = sanitizeUsernameSegment(profileName);
+  if (sanitizedFromName.length >= 3) {
+    return sanitizedFromName.slice(0, GOOGLE_USERNAME_MAX_LENGTH);
+  }
+
+  const sanitizedFromEmail = sanitizeUsernameSegment(emailLocalPart);
+  if (sanitizedFromEmail.length >= 3) {
+    return sanitizedFromEmail.slice(0, GOOGLE_USERNAME_MAX_LENGTH);
+  }
+
+  return "google_user";
+}
+
+async function resolveUniqueUsername(baseUsername) {
+  const base = baseUsername.slice(0, GOOGLE_USERNAME_MAX_LENGTH);
+  let candidate = base;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const mongoMatch = await User.findOne({ username: candidate });
+    const memoryMatch = db.users.find((user) => user.username === candidate);
+    if (!mongoMatch && !memoryMatch) {
+      return candidate;
+    }
+
+    const suffix = crypto.randomBytes(2).toString("hex");
+    const head = base.slice(0, Math.max(3, GOOGLE_USERNAME_MAX_LENGTH - suffix.length - 1));
+    candidate = `${head}_${suffix}`;
+  }
+
+  return `${base.slice(0, 21)}_${crypto.randomUUID().slice(0, 8)}`;
+}
 
 /**
  * POST /api/auth/login
@@ -40,6 +104,79 @@ authRouter.post("/login", async (req, res) => {
     }
     const token = issueToken(memUser.id);
     return res.json(ok({ token, ...sanitizeUser(memUser) }, "Đăng nhập thành công"));
+  }
+});
+
+/**
+ * POST /api/auth/google
+ * Đăng nhập bằng Google ID token.
+ */
+authRouter.post("/google", async (req, res) => {
+  const { credential } = req.body;
+
+  if (typeof credential !== "string" || credential.trim().length === 0) {
+    return res.status(400).json(fail("Thiếu Google credential", 400));
+  }
+
+  const googleVerifier = getGoogleVerifier();
+  if (!googleVerifier) {
+    return res.status(503).json(
+      fail("Google login chưa được cấu hình trên máy chủ (thiếu GOOGLE_CLIENT_ID)", 503),
+    );
+  }
+
+  let payload;
+  try {
+    const ticket = await googleVerifier.client.verifyIdToken({
+      idToken: credential,
+      audience: googleVerifier.clientId,
+    });
+    payload = ticket.getPayload();
+  } catch (error) {
+    console.error("Google verify error:", error);
+    return res.status(401).json(fail("Google token không hợp lệ hoặc đã hết hạn", 401));
+  }
+
+  if (!payload?.sub || !payload.email || payload.email_verified !== true) {
+    return res.status(401).json(fail("Tài khoản Google không hợp lệ", 401));
+  }
+
+  const normalizedEmail = payload.email.trim().toLowerCase();
+
+  try {
+    let user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      const username = await resolveUniqueUsername(buildGoogleUsernameSeed(payload));
+      const generatedPassword = `google_${crypto.randomUUID()}`;
+      user = await User.create({
+        username,
+        email: normalizedEmail,
+        password: generatedPassword,
+        role: "USER",
+      });
+    }
+
+    const token = issueToken(user._id.toString());
+    return res.json(ok({ token, ...sanitizeUser(user) }, "Đăng nhập Google thành công"));
+  } catch (error) {
+    console.error("Google login storage error:", error);
+
+    if (error?.code === 11000) {
+      try {
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+          const token = issueToken(existingUser._id.toString());
+          return res.json(ok({ token, ...sanitizeUser(existingUser) }, "Đăng nhập Google thành công"));
+        }
+      } catch (lookupError) {
+        console.error("Google duplicate lookup error:", lookupError);
+      }
+    }
+
+    return res.status(503).json(
+      fail("Không thể xử lý đăng nhập Google lúc này, vui lòng thử lại", 503),
+    );
   }
 });
 

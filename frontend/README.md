@@ -86,6 +86,7 @@ All environment variables must be prefixed with `VITE_` to be exposed to the cli
 | `VITE_APP_NAME`     | Application name                     | Nhom12 App                                           |
 | `VITE_APP_ENV`      | Environment (development/production) | —                                                    |
 | `VITE_API_BASE_URL` | API base URL                         | http://localhost:8080/api in dev, /api in production |
+| `VITE_GOOGLE_CLIENT_ID` | Google OAuth Web Client ID (optional) | — |
 
 Files:
 

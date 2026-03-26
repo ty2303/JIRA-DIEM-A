@@ -2,6 +2,7 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
+  Globe,
   Loader2,
   Lock,
   Mail,
@@ -9,7 +10,7 @@ import {
   User,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
@@ -25,6 +26,81 @@ interface AuthResponse {
   email: string;
   role: 'USER' | 'ADMIN';
 }
+
+interface GoogleCredentialResponse {
+  credential?: string;
+}
+
+interface GoogleIdConfiguration {
+  client_id: string;
+  callback: (response: GoogleCredentialResponse) => void;
+}
+
+interface GoogleButtonConfiguration {
+  theme?: 'outline' | 'filled_blue' | 'filled_black';
+  size?: 'large' | 'medium' | 'small';
+  text?:
+    | 'signin_with'
+    | 'signup_with'
+    | 'continue_with'
+    | 'signin'
+    | 'signup'
+    | 'continue';
+  shape?: 'rectangular' | 'pill' | 'circle' | 'square';
+  width?: number;
+  logo_alignment?: 'left' | 'center';
+}
+
+interface GoogleAccountsIdApi {
+  initialize: (config: GoogleIdConfiguration) => void;
+  renderButton: (element: HTMLElement, config: GoogleButtonConfiguration) => void;
+}
+
+interface GoogleAccountsApi {
+  id: GoogleAccountsIdApi;
+}
+
+interface GoogleIdentityApi {
+  accounts: GoogleAccountsApi;
+}
+
+declare global {
+  interface Window {
+    google?: GoogleIdentityApi;
+  }
+}
+
+const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
+const GOOGLE_SCRIPT_SOURCE = 'https://accounts.google.com/gsi/client';
+
+const loadGoogleIdentityScript = () =>
+  new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById(GOOGLE_SCRIPT_ID) as
+      | HTMLScriptElement
+      | null;
+
+    if (window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('load-error')), {
+        once: true,
+      });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = GOOGLE_SCRIPT_ID;
+    script.src = GOOGLE_SCRIPT_SOURCE;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('load-error'));
+    document.head.appendChild(script);
+  });
 
 const isValidEmail = (email: string) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -69,8 +145,12 @@ export function Component() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [registerSuccess, setRegisterSuccess] = useState(false);
+  const googleButtonContainerRef = useRef<HTMLDivElement | null>(null);
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
@@ -85,6 +165,101 @@ export function Component() {
   useEffect(() => {
     setError('');
   }, [isLogin]);
+
+  const completeLogin = async (payload: AuthResponse) => {
+    const { token, ...user } = payload;
+    login(token, user as AuthUser);
+    await useWishlistStore.getState().syncSession();
+    useCartStore.getState().fetch();
+    navigate(user.role === 'ADMIN' ? '/admin' : '/');
+  };
+
+  const handleGoogleCredential = async (credential: string) => {
+    setError('');
+    setGoogleLoading(true);
+
+    try {
+      const response = await apiClient.post<ApiResponse<AuthResponse>>(
+        ENDPOINTS.AUTH.GOOGLE,
+        {
+          credential,
+        },
+      );
+
+      await completeLogin(response.data.data);
+    } catch (err: unknown) {
+      const axiosErr = err as {
+        response?: {
+          data?: { message?: string };
+        };
+      };
+      setError(
+        axiosErr.response?.data?.message ??
+          'Không thể đăng nhập Google, vui lòng thử lại',
+      );
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+
+    if (!isLogin || !googleClientId) {
+      setGoogleReady(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    const initializeGoogle = async () => {
+      try {
+        await loadGoogleIdentityScript();
+
+        if (!active || !googleButtonContainerRef.current || !window.google) {
+          return;
+        }
+
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            if (!active) {
+              return;
+            }
+
+            if (!response.credential) {
+              setError('Không thể lấy thông tin đăng nhập từ Google');
+              return;
+            }
+
+            void handleGoogleCredential(response.credential);
+          },
+        });
+
+        googleButtonContainerRef.current.replaceChildren();
+        window.google.accounts.id.renderButton(googleButtonContainerRef.current, {
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          width: 360,
+          logo_alignment: 'left',
+        });
+        setGoogleReady(true);
+      } catch {
+        if (active) {
+          setGoogleReady(false);
+          setError('Không thể tải Google Sign-In, vui lòng thử lại sau');
+        }
+      }
+    };
+
+    void initializeGoogle();
+
+    return () => {
+      active = false;
+    };
+  }, [googleClientId, isLogin]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -127,18 +302,13 @@ export function Component() {
         endpoint,
         body,
       );
-      const { token, ...user } = res.data.data;
-
       if (!isLogin) {
         setRegisterSuccess(true);
         setLoading(false);
         return;
       }
 
-      login(token, user as AuthUser);
-      await useWishlistStore.getState().syncSession();
-      useCartStore.getState().fetch();
-      navigate(user.role === 'ADMIN' ? '/admin' : '/');
+      await completeLogin(res.data.data);
     } catch (err: unknown) {
       const axiosErr = err as {
         response?: {
@@ -505,7 +675,7 @@ export function Component() {
                 {/* Submit button */}
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || googleLoading}
                   className="btn-primary flex w-full cursor-pointer items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading ? (
@@ -520,6 +690,53 @@ export function Component() {
                     </>
                   )}
                 </button>
+
+                {isLogin && (
+                  <div className="space-y-3 pt-1">
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <div className="w-full border-t border-border" />
+                      </div>
+                      <span className="relative mx-auto block w-fit bg-surface px-2 text-xs text-text-muted">
+                        Hoặc tiếp tục với Google
+                      </span>
+                    </div>
+
+                    {googleClientId ? (
+                      <div className="space-y-2">
+                        <div
+                          ref={googleButtonContainerRef}
+                          className="flex min-h-10 items-center justify-center"
+                        />
+                        {!googleReady && (
+                          <p className="text-center text-xs text-text-muted">
+                            Đang khởi tạo Google Sign-In...
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setError(
+                            'Thiếu cấu hình VITE_GOOGLE_CLIENT_ID. Vui lòng cập nhật frontend/.env',
+                          )
+                        }
+                        className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface-alt px-4 py-2.5 text-sm font-medium text-text-secondary transition-colors hover:border-brand hover:text-brand"
+                      >
+                        <Globe className="h-4 w-4" />
+                        Đăng nhập với Google
+                      </button>
+                    )}
+
+                    {googleLoading && (
+                      <p className="flex items-center justify-center gap-2 text-xs text-text-muted">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Đang xác thực Google...
+                      </p>
+                    )}
+                  </div>
+                )}
               </form>
             </motion.div>
           )}
