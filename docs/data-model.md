@@ -11,10 +11,12 @@ bi de chuyen sang database that o cac story sau.
 - `id`
 - `username`
 - `email`
-- `password`
+- `password` (optional — null cho tài khoản Google-only)
 - `role`
-- `hasPassword`
-- `authProvider`
+- `googleId` (optional — ID từ Google OAuth)
+- `authProvider` (enum: local | google)
+- `hasPassword` (boolean — false nếu chỉ đăng nhập bằng Google)
+- `avatar` (optional — URL ảnh đại diện từ Google)
 - `createdAt`
 
 ### Category

@@ -6,6 +6,9 @@ export interface AuthUser {
   username: string;
   email: string;
   role: 'USER' | 'ADMIN';
+  authProvider: 'local' | 'google';
+  hasPassword: boolean;
+  avatar: string | null;
 }
 
 interface AuthState {
