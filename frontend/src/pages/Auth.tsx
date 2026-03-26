@@ -359,14 +359,18 @@ export function Component() {
                       className="w-full rounded-lg border border-border bg-surface py-2.5 pr-10 pl-10 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
                       placeholder="••••••••"
                       required
-                      autoComplete={isLogin ? 'current-password' : 'new-password'}
+                      autoComplete={
+                        isLogin ? 'current-password' : 'new-password'
+                      }
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute top-2.5 right-3 cursor-pointer text-text-muted transition-colors hover:text-text-secondary"
                       tabIndex={-1}
-                      aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                      aria-label={
+                        showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'
+                      }
                     >
                       {showPassword ? (
                         <EyeOff className="h-5 w-5" />
@@ -423,10 +427,16 @@ export function Component() {
                           />
                           <button
                             type="button"
-                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            onClick={() =>
+                              setShowConfirmPassword(!showConfirmPassword)
+                            }
                             className="absolute top-2.5 right-3 cursor-pointer text-text-muted transition-colors hover:text-text-secondary"
                             tabIndex={-1}
-                            aria-label={showConfirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                            aria-label={
+                              showConfirmPassword
+                                ? 'Ẩn mật khẩu'
+                                : 'Hiện mật khẩu'
+                            }
                           >
                             {showConfirmPassword ? (
                               <EyeOff className="h-5 w-5" />
@@ -451,11 +461,17 @@ export function Component() {
                         />
                         <span>
                           Tôi đồng ý với{' '}
-                          <a href="/about" className="text-brand hover:underline">
+                          <a
+                            href="/about"
+                            className="text-brand hover:underline"
+                          >
                             Điều khoản sử dụng
                           </a>{' '}
                           và{' '}
-                          <a href="/about" className="text-brand hover:underline">
+                          <a
+                            href="/about"
+                            className="text-brand hover:underline"
+                          >
                             Chính sách bảo mật
                           </a>
                         </span>
