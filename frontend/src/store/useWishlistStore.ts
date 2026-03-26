@@ -9,11 +9,10 @@ import type { Product } from '@/types/product';
 
 const GUEST_WISHLIST_KEY = 'guest';
 
-const isProductArray = (value: unknown): value is Product[] => Array.isArray(value);
+const isProductArray = (value: unknown): value is Product[] =>
+  Array.isArray(value);
 
-const sanitizeItemsByOwner = (
-  value: unknown,
-): WishlistPersistedBuckets => {
+const sanitizeItemsByOwner = (value: unknown): WishlistPersistedBuckets => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
   }

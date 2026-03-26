@@ -53,7 +53,10 @@ interface GoogleButtonConfiguration {
 
 interface GoogleAccountsIdApi {
   initialize: (config: GoogleIdConfiguration) => void;
-  renderButton: (element: HTMLElement, config: GoogleButtonConfiguration) => void;
+  renderButton: (
+    element: HTMLElement,
+    config: GoogleButtonConfiguration,
+  ) => void;
 }
 
 interface GoogleAccountsApi {
@@ -75,9 +78,9 @@ const GOOGLE_SCRIPT_SOURCE = 'https://accounts.google.com/gsi/client';
 
 const loadGoogleIdentityScript = () =>
   new Promise<void>((resolve, reject) => {
-    const existing = document.getElementById(GOOGLE_SCRIPT_ID) as
-      | HTMLScriptElement
-      | null;
+    const existing = document.getElementById(
+      GOOGLE_SCRIPT_ID,
+    ) as HTMLScriptElement | null;
 
     if (window.google?.accounts?.id) {
       resolve();
@@ -86,9 +89,13 @@ const loadGoogleIdentityScript = () =>
 
     if (existing) {
       existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('load-error')), {
-        once: true,
-      });
+      existing.addEventListener(
+        'error',
+        () => reject(new Error('load-error')),
+        {
+          once: true,
+        },
+      );
       return;
     }
 
@@ -237,14 +244,17 @@ export function Component() {
         });
 
         googleButtonContainerRef.current.replaceChildren();
-        window.google.accounts.id.renderButton(googleButtonContainerRef.current, {
-          theme: 'outline',
-          size: 'large',
-          text: 'continue_with',
-          shape: 'pill',
-          width: 360,
-          logo_alignment: 'left',
-        });
+        window.google.accounts.id.renderButton(
+          googleButtonContainerRef.current,
+          {
+            theme: 'outline',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'pill',
+            width: 360,
+            logo_alignment: 'left',
+          },
+        );
         setGoogleReady(true);
       } catch {
         if (active) {
@@ -529,14 +539,18 @@ export function Component() {
                       className="w-full rounded-lg border border-border bg-surface py-2.5 pr-10 pl-10 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
                       placeholder="••••••••"
                       required
-                      autoComplete={isLogin ? 'current-password' : 'new-password'}
+                      autoComplete={
+                        isLogin ? 'current-password' : 'new-password'
+                      }
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute top-2.5 right-3 cursor-pointer text-text-muted transition-colors hover:text-text-secondary"
                       tabIndex={-1}
-                      aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                      aria-label={
+                        showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'
+                      }
                     >
                       {showPassword ? (
                         <EyeOff className="h-5 w-5" />
@@ -593,10 +607,16 @@ export function Component() {
                           />
                           <button
                             type="button"
-                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            onClick={() =>
+                              setShowConfirmPassword(!showConfirmPassword)
+                            }
                             className="absolute top-2.5 right-3 cursor-pointer text-text-muted transition-colors hover:text-text-secondary"
                             tabIndex={-1}
-                            aria-label={showConfirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                            aria-label={
+                              showConfirmPassword
+                                ? 'Ẩn mật khẩu'
+                                : 'Hiện mật khẩu'
+                            }
                           >
                             {showConfirmPassword ? (
                               <EyeOff className="h-5 w-5" />
@@ -621,11 +641,17 @@ export function Component() {
                         />
                         <span>
                           Tôi đồng ý với{' '}
-                          <a href="/about" className="text-brand hover:underline">
+                          <a
+                            href="/about"
+                            className="text-brand hover:underline"
+                          >
                             Điều khoản sử dụng
                           </a>{' '}
                           và{' '}
-                          <a href="/about" className="text-brand hover:underline">
+                          <a
+                            href="/about"
+                            className="text-brand hover:underline"
+                          >
                             Chính sách bảo mật
                           </a>
                         </span>
