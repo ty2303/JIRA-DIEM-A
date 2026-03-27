@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import express from "express";
 import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/User.js";
+import { isDatabaseReady } from "../data/mongodb.js";
 import { db, issueToken, sanitizeUser } from "../data/store.js";
 import { fail, ok } from "../lib/apiResponse.js";
 
@@ -23,6 +24,14 @@ setInterval(() => {
 let cachedGoogleClientId = "";
 let cachedGoogleClient = null;
 
+class AuthRouteError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "AuthRouteError";
+    this.status = status;
+  }
+}
+
 function getGoogleVerifier() {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
   if (!clientId) {
@@ -38,6 +47,244 @@ function getGoogleVerifier() {
 }
 
 const GOOGLE_USERNAME_MAX_LENGTH = 30;
+const GOOGLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function getGoogleOAuthConfig() {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || "";
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI?.trim() || "";
+
+  return { clientId, clientSecret, redirectUri };
+}
+
+function requireGoogleOAuthConfig() {
+  const config = getGoogleOAuthConfig();
+  if (!config.clientId || !config.clientSecret || !config.redirectUri) {
+    throw new AuthRouteError(
+      "Google OAuth chưa được cấu hình (thiếu GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET hoặc GOOGLE_REDIRECT_URI)",
+      503,
+    );
+  }
+
+  return config;
+}
+
+function createAuthSuccessResponse(user) {
+  const token = issueToken(user._id?.toString() ?? user.id);
+  return ok({ token, ...sanitizeUser(user) }, "Đăng nhập thành công");
+}
+
+function consumeGoogleOAuthState(state) {
+  if (typeof state !== "string" || state.trim().length === 0) {
+    throw new AuthRouteError("State Google OAuth không hợp lệ hoặc đã hết hạn", 400);
+  }
+
+  const expiry = oauthStateStore.get(state);
+  oauthStateStore.delete(state);
+
+  if (!expiry || Date.now() > expiry) {
+    throw new AuthRouteError("State Google OAuth không hợp lệ hoặc đã hết hạn", 400);
+  }
+}
+
+function isValidEmail(email) {
+  return GOOGLE_EMAIL_REGEX.test(email);
+}
+
+function normalizeGoogleIdentity(profile, { requireVerifiedEmail = false } = {}) {
+  const googleId = typeof profile?.sub === "string" ? profile.sub.trim() : "";
+  const email = typeof profile?.email === "string" ? profile.email.trim().toLowerCase() : "";
+  const name = typeof profile?.name === "string" ? profile.name.trim() : "";
+  const avatar = typeof profile?.picture === "string" ? profile.picture.trim() : "";
+
+  if (!googleId) {
+    throw new AuthRouteError("Không thể xác định định danh Google của người dùng", 400);
+  }
+
+  if (!email) {
+    throw new AuthRouteError("Không thể lấy email từ tài khoản Google", 400);
+  }
+
+  if (!isValidEmail(email)) {
+    throw new AuthRouteError("Email trả về từ Google không hợp lệ", 400);
+  }
+
+  if (requireVerifiedEmail && profile.email_verified !== true) {
+    throw new AuthRouteError("Tài khoản Google không hợp lệ", 401);
+  }
+
+  return {
+    googleId,
+    email,
+    name,
+    avatar: avatar || null,
+  };
+}
+
+async function parseJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function exchangeGoogleCodeForTokens(code) {
+  const { clientId, clientSecret, redirectUri } = requireGoogleOAuthConfig();
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  const payload = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    if (payload?.error === "invalid_grant") {
+      throw new AuthRouteError("Google authorization code không hợp lệ hoặc đã hết hạn", 400);
+    }
+
+    console.error("Google token exchange error:", payload);
+    throw new AuthRouteError("Google trả về lỗi khi đổi authorization code", 502);
+  }
+
+  if (typeof payload?.access_token !== "string" || payload.access_token.trim().length === 0) {
+    throw new AuthRouteError("Google không trả về access token hợp lệ", 502);
+  }
+
+  return payload;
+}
+
+async function fetchGoogleUserProfile(accessToken) {
+  const response = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const payload = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    console.error("Google userinfo error:", payload);
+    throw new AuthRouteError("Không thể lấy thông tin người dùng từ Google", 502);
+  }
+
+  return payload;
+}
+
+function applyGoogleProfileToUser(user, profile) {
+  user.googleId = profile.googleId;
+  user.authProvider = "google";
+
+  if (typeof user.hasPassword !== "boolean") {
+    user.hasPassword = Boolean(user.password);
+  }
+
+  if (!user.avatar && profile.avatar) {
+    user.avatar = profile.avatar;
+  }
+
+  return user;
+}
+
+async function findGoogleUserInStoreByGoogleId(googleId) {
+  return db.users.find((user) => user.googleId === googleId) ?? null;
+}
+
+async function findGoogleUserInStoreByEmail(email) {
+  return db.users.find((user) => user.email === email) ?? null;
+}
+
+async function saveGoogleUser(user) {
+  if (typeof user.save === "function") {
+    return user.save();
+  }
+
+  return user;
+}
+
+async function createGoogleUser(profile) {
+  const username = await resolveUniqueUsername(buildGoogleUsernameSeed(profile));
+
+  if (isDatabaseReady()) {
+    return User.create({
+      username,
+      email: profile.email,
+      role: "USER",
+      googleId: profile.googleId,
+      authProvider: "google",
+      hasPassword: false,
+      avatar: profile.avatar,
+    });
+  }
+
+  const newUser = {
+    id: crypto.randomUUID(),
+    username,
+    email: profile.email,
+    role: "USER",
+    googleId: profile.googleId,
+    authProvider: "google",
+    hasPassword: false,
+    avatar: profile.avatar,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.users.push(newUser);
+  return newUser;
+}
+
+async function resolveGoogleUser(profile) {
+  const findByGoogleId = isDatabaseReady()
+    ? (googleId) => User.findOne({ googleId })
+    : findGoogleUserInStoreByGoogleId;
+  const findByEmail = isDatabaseReady()
+    ? (email) => User.findOne({ email })
+    : findGoogleUserInStoreByEmail;
+
+  let user = await findByGoogleId(profile.googleId);
+  if (user) {
+    applyGoogleProfileToUser(user, profile);
+    return saveGoogleUser(user);
+  }
+
+  user = await findByEmail(profile.email);
+  if (user) {
+    if (user.googleId && user.googleId !== profile.googleId) {
+      throw new AuthRouteError("Email này đã được liên kết với một tài khoản Google khác", 409);
+    }
+
+    applyGoogleProfileToUser(user, profile);
+    return saveGoogleUser(user);
+  }
+
+  try {
+    return await createGoogleUser(profile);
+  } catch (error) {
+    if (error?.code === 11000) {
+      const existingUser = (await findByGoogleId(profile.googleId)) || (await findByEmail(profile.email));
+
+      if (existingUser) {
+        if (existingUser.googleId && existingUser.googleId !== profile.googleId) {
+          throw new AuthRouteError("Email này đã được liên kết với một tài khoản Google khác", 409);
+        }
+
+        applyGoogleProfileToUser(existingUser, profile);
+        return saveGoogleUser(existingUser);
+      }
+    }
+
+    throw error;
+  }
+}
 
 function sanitizeUsernameSegment(value) {
   return value
@@ -89,9 +336,7 @@ async function resolveUniqueUsername(baseUsername) {
  * Sử dụng Authorization Code Flow với PKCE-equivalent state để chống CSRF.
  */
 authRouter.get("/google/redirect", (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI?.trim();
+  const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
 
   if (!clientId || !clientSecret || !redirectUri) {
     return res.status(503).json(
@@ -115,6 +360,40 @@ authRouter.get("/google/redirect", (req, res) => {
   });
 
   return res.redirect(302, authUrl);
+});
+
+authRouter.get("/google/callback", async (req, res) => {
+  const googleError = typeof req.query.error === "string" ? req.query.error : "";
+  const code = typeof req.query.code === "string" ? req.query.code.trim() : "";
+  const state = typeof req.query.state === "string" ? req.query.state.trim() : "";
+
+  if (googleError) {
+    return res.status(400).json(fail("Google trả về lỗi xác thực hoặc người dùng đã từ chối đăng nhập", 400));
+  }
+
+  try {
+    consumeGoogleOAuthState(state);
+
+    if (!code) {
+      throw new AuthRouteError("Thiếu authorization code từ Google", 400);
+    }
+
+    const tokenPayload = await exchangeGoogleCodeForTokens(code);
+    const profilePayload = await fetchGoogleUserProfile(tokenPayload.access_token);
+    const profile = normalizeGoogleIdentity(profilePayload);
+    const user = await resolveGoogleUser(profile);
+
+    return res.json(createAuthSuccessResponse(user));
+  } catch (error) {
+    if (error instanceof AuthRouteError) {
+      return res.status(error.status).json(fail(error.message, error.status));
+    }
+
+    console.error("Google callback error:", error);
+    return res.status(503).json(
+      fail("Không thể xử lý đăng nhập Google lúc này, vui lòng thử lại", 503),
+    );
+  }
 });
 
 /**
@@ -184,42 +463,16 @@ authRouter.post("/google", async (req, res) => {
     return res.status(401).json(fail("Google token không hợp lệ hoặc đã hết hạn", 401));
   }
 
-  if (!payload?.sub || !payload.email || payload.email_verified !== true) {
-    return res.status(401).json(fail("Tài khoản Google không hợp lệ", 401));
-  }
-
-  const normalizedEmail = payload.email.trim().toLowerCase();
-
   try {
-    let user = await User.findOne({ email: normalizedEmail });
-
-    if (!user) {
-      const username = await resolveUniqueUsername(buildGoogleUsernameSeed(payload));
-      const generatedPassword = `google_${crypto.randomUUID()}`;
-      user = await User.create({
-        username,
-        email: normalizedEmail,
-        password: generatedPassword,
-        role: "USER",
-      });
-    }
-
-    const token = issueToken(user._id.toString());
-    return res.json(ok({ token, ...sanitizeUser(user) }, "Đăng nhập Google thành công"));
+    const profile = normalizeGoogleIdentity(payload, { requireVerifiedEmail: true });
+    const user = await resolveGoogleUser(profile);
+    return res.json(createAuthSuccessResponse(user));
   } catch (error) {
-    console.error("Google login storage error:", error);
-
-    if (error?.code === 11000) {
-      try {
-        const existingUser = await User.findOne({ email: normalizedEmail });
-        if (existingUser) {
-          const token = issueToken(existingUser._id.toString());
-          return res.json(ok({ token, ...sanitizeUser(existingUser) }, "Đăng nhập Google thành công"));
-        }
-      } catch (lookupError) {
-        console.error("Google duplicate lookup error:", lookupError);
-      }
+    if (error instanceof AuthRouteError) {
+      return res.status(error.status).json(fail(error.message, error.status));
     }
+
+    console.error("Google login storage error:", error);
 
     return res.status(503).json(
       fail("Không thể xử lý đăng nhập Google lúc này, vui lòng thử lại", 503),

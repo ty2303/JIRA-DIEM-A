@@ -5,6 +5,9 @@ import { WebSocket } from "ws";
 import { app } from "../src/app.js";
 import { db } from "../src/data/store.js";
 import { attachRealtimeServer } from "../src/lib/realtime.js";
+import { oauthStateStore } from "../src/routes/auth.js";
+
+const originalFetch = global.fetch;
 
 // ─── Server helpers ───────────────────────────────────────────────────────────
 
@@ -64,6 +67,44 @@ function removeTestOrder(orderId) {
 
 function removeTestUserByEmail(email) {
 	db.users = db.users.filter((user) => user.email !== email);
+}
+
+function removeGoogleAuthTestUsers() {
+	db.users = db.users.filter((user) => !String(user.email).endsWith("@google-callback.test"));
+}
+
+function mockFetchSequence(responses) {
+	const calls = [];
+	global.fetch = async (...args) => {
+		const requestUrl =
+			typeof args[0] === "string"
+				? args[0]
+				: args[0] instanceof URL
+					? args[0].toString()
+					: args[0]?.url;
+
+		if (typeof requestUrl === "string" && requestUrl.startsWith("http://127.0.0.1:")) {
+			return originalFetch(...args);
+		}
+
+		calls.push(args);
+		const next = responses.shift();
+
+		if (!next) {
+			throw new Error("Unexpected fetch call");
+		}
+
+		if (next.error) {
+			throw next.error;
+		}
+
+		return new Response(JSON.stringify(next.body ?? {}), {
+			status: next.status ?? 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	};
+
+	return calls;
 }
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
@@ -180,6 +221,12 @@ test("GET /health returns service status", async () => {
 describe("Auth - local", () => {
 	afterEach(() => {
 		removeTestUserByEmail("newuser_test@example.com");
+		removeGoogleAuthTestUsers();
+		oauthStateStore.clear();
+		global.fetch = originalFetch;
+		delete process.env.GOOGLE_CLIENT_ID;
+		delete process.env.GOOGLE_CLIENT_SECRET;
+		delete process.env.GOOGLE_REDIRECT_URI;
 	});
 
 	test("POST /api/auth/register creates a new user and returns token", async () => {
@@ -292,6 +339,217 @@ describe("Auth - local", () => {
 			});
 
 			assert.equal(res.status, 503);
+		});
+	});
+
+	test("GET /api/auth/google/callback rejects invalid state before calling Google", async () => {
+		const fetchCalls = mockFetchSequence([]);
+
+		process.env.GOOGLE_CLIENT_ID = "google-client-id";
+		process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+		process.env.GOOGLE_REDIRECT_URI = "http://localhost:5173/auth/google/callback";
+
+		await withServer(async (port) => {
+			const res = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=test-code&state=bad-state`,
+			);
+			const body = await res.json();
+
+			assert.equal(res.status, 400);
+			assert.equal(body.message, "State Google OAuth không hợp lệ hoặc đã hết hạn");
+			assert.equal(fetchCalls.length, 0);
+		});
+	});
+
+	test("GET /api/auth/google/callback exchanges code and returns auth payload for linked Google user", async () => {
+		const fetchCalls = mockFetchSequence([
+			{
+				body: {
+					access_token: "google-access-token",
+					token_type: "Bearer",
+					expires_in: 3600,
+				},
+			},
+			{
+				body: {
+					sub: "google-sub-existing",
+					email: "linked-user@google-callback.test",
+					name: "Linked User",
+					picture: "https://example.com/avatar-linked.png",
+				},
+			},
+		]);
+
+		process.env.GOOGLE_CLIENT_ID = "google-client-id";
+		process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+		process.env.GOOGLE_REDIRECT_URI = "http://localhost:5173/auth/google/callback";
+
+		db.users.push({
+			id: "google-linked-user",
+			username: "google_linked_user",
+			email: "linked-user@google-callback.test",
+			role: "USER",
+			googleId: "google-sub-existing",
+			authProvider: "google",
+			hasPassword: false,
+			avatar: null,
+			createdAt: new Date().toISOString(),
+		});
+
+		oauthStateStore.set("valid-google-state", Date.now() + 60_000);
+
+		await withServer(async (port) => {
+			const res = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=test-code&state=valid-google-state`,
+			);
+			const body = await res.json();
+
+			assert.equal(res.status, 200);
+			assert.equal(body.message, "Đăng nhập thành công");
+			assert.ok(body.data.token);
+			assert.equal(body.data.id, "google-linked-user");
+			assert.equal(body.data.username, "google_linked_user");
+			assert.equal(body.data.email, "linked-user@google-callback.test");
+			assert.equal(body.data.role, "USER");
+			assert.equal(body.data.authProvider, "google");
+			assert.equal(body.data.hasPassword, false);
+			assert.equal(body.data.avatar, "https://example.com/avatar-linked.png");
+			assert.equal(fetchCalls.length, 2);
+			assert.equal(fetchCalls[0][0], "https://oauth2.googleapis.com/token");
+			assert.equal(fetchCalls[1][0], "https://openidconnect.googleapis.com/v1/userinfo");
+			assert.equal(oauthStateStore.has("valid-google-state"), false);
+		});
+	});
+
+	test("GET /api/auth/google/callback links an existing local account by email", async () => {
+		mockFetchSequence([
+			{
+				body: {
+					access_token: "google-access-token",
+					token_type: "Bearer",
+					expires_in: 3600,
+				},
+			},
+			{
+				body: {
+					sub: "google-sub-link",
+					email: "local-user@google-callback.test",
+					name: "Local User",
+					picture: "https://example.com/avatar-local.png",
+				},
+			},
+		]);
+
+		process.env.GOOGLE_CLIENT_ID = "google-client-id";
+		process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+		process.env.GOOGLE_REDIRECT_URI = "http://localhost:5173/auth/google/callback";
+
+		db.users.push({
+			id: "local-user-link",
+			username: "local_user_link",
+			email: "local-user@google-callback.test",
+			password: "password123",
+			role: "USER",
+			authProvider: "local",
+			hasPassword: true,
+			avatar: null,
+			createdAt: new Date().toISOString(),
+		});
+
+		oauthStateStore.set("link-account-state", Date.now() + 60_000);
+
+		await withServer(async (port) => {
+			const beforeCount = db.users.length;
+			const res = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=test-code&state=link-account-state`,
+			);
+			const body = await res.json();
+			const linkedUser = db.users.find((user) => user.id === "local-user-link");
+
+			assert.equal(res.status, 200);
+			assert.equal(db.users.length, beforeCount);
+			assert.equal(body.data.id, "local-user-link");
+			assert.equal(body.data.authProvider, "google");
+			assert.equal(body.data.hasPassword, true);
+			assert.equal(body.data.avatar, "https://example.com/avatar-local.png");
+			assert.equal(linkedUser?.googleId, "google-sub-link");
+			assert.equal(linkedUser?.authProvider, "google");
+			assert.equal(linkedUser?.hasPassword, true);
+			assert.equal(linkedUser?.avatar, "https://example.com/avatar-local.png");
+		});
+	});
+
+	test("GET /api/auth/google/callback maps invalid_grant and rejects replayed state", async () => {
+		const fetchCalls = mockFetchSequence([
+			{
+				status: 400,
+				body: {
+					error: "invalid_grant",
+				},
+			},
+		]);
+
+		process.env.GOOGLE_CLIENT_ID = "google-client-id";
+		process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+		process.env.GOOGLE_REDIRECT_URI = "http://localhost:5173/auth/google/callback";
+
+		oauthStateStore.set("single-use-state", Date.now() + 60_000);
+
+		await withServer(async (port) => {
+			const firstRes = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=expired-code&state=single-use-state`,
+			);
+			const firstBody = await firstRes.json();
+
+			assert.equal(firstRes.status, 400);
+			assert.equal(firstBody.message, "Google authorization code không hợp lệ hoặc đã hết hạn");
+			assert.equal(fetchCalls.length, 1);
+
+			const secondRes = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=expired-code&state=single-use-state`,
+			);
+			const secondBody = await secondRes.json();
+
+			assert.equal(secondRes.status, 400);
+			assert.equal(secondBody.message, "State Google OAuth không hợp lệ hoặc đã hết hạn");
+			assert.equal(fetchCalls.length, 1);
+		});
+	});
+
+	test("GET /api/auth/google/callback rejects Google profiles without email", async () => {
+		const fetchCalls = mockFetchSequence([
+			{
+				body: {
+					access_token: "google-access-token",
+					token_type: "Bearer",
+					expires_in: 3600,
+				},
+			},
+			{
+				body: {
+					sub: "google-sub-no-email",
+					name: "No Email User",
+					picture: "https://example.com/avatar-no-email.png",
+				},
+			},
+		]);
+
+		process.env.GOOGLE_CLIENT_ID = "google-client-id";
+		process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+		process.env.GOOGLE_REDIRECT_URI = "http://localhost:5173/auth/google/callback";
+
+		oauthStateStore.set("missing-email-state", Date.now() + 60_000);
+
+		await withServer(async (port) => {
+			const res = await fetch(
+				`http://127.0.0.1:${port}/api/auth/google/callback?code=test-code&state=missing-email-state`,
+			);
+			const body = await res.json();
+
+			assert.equal(res.status, 400);
+			assert.equal(body.message, "Không thể lấy email từ tài khoản Google");
+			assert.equal(fetchCalls.length, 2);
+			assert.equal(oauthStateStore.has("missing-email-state"), false);
 		});
 	});
 
