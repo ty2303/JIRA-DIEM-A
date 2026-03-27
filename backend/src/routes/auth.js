@@ -7,6 +7,19 @@ import { fail, ok } from "../lib/apiResponse.js";
 
 export const authRouter = express.Router();
 
+// ---------------------------------------------------------------------------
+// OAuth state store — CSRF protection cho Authorization Code Flow
+// key: state hex string, value: expiry timestamp (ms)
+// ---------------------------------------------------------------------------
+export const oauthStateStore = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [state, expiry] of oauthStateStore) {
+    if (now > expiry) oauthStateStore.delete(state);
+  }
+}, 15 * 60 * 1000).unref();
+
 let cachedGoogleClientId = "";
 let cachedGoogleClient = null;
 
@@ -69,6 +82,40 @@ async function resolveUniqueUsername(baseUsername) {
 
   return `${base.slice(0, 21)}_${crypto.randomUUID().slice(0, 8)}`;
 }
+
+/**
+ * GET /api/auth/google/redirect
+ * Tạo Google OAuth authorization URL và redirect người dùng đến trang đăng nhập Google.
+ * Sử dụng Authorization Code Flow với PKCE-equivalent state để chống CSRF.
+ */
+authRouter.get("/google/redirect", (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI?.trim();
+
+  if (!clientId || !clientSecret || !redirectUri) {
+    return res.status(503).json(
+      fail(
+        "Google OAuth chưa được cấu hình (thiếu GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET hoặc GOOGLE_REDIRECT_URI)",
+        503,
+      ),
+    );
+  }
+
+  const oauthClient = new OAuth2Client(clientId, clientSecret, redirectUri);
+
+  const state = crypto.randomBytes(16).toString("hex");
+  oauthStateStore.set(state, Date.now() + 10 * 60 * 1000); // hết hạn sau 10 phút
+
+  const authUrl = oauthClient.generateAuthUrl({
+    access_type: "offline",
+    scope: ["openid", "email", "profile"],
+    state,
+    prompt: "select_account",
+  });
+
+  return res.redirect(302, authUrl);
+});
 
 /**
  * POST /api/auth/login
