@@ -30,8 +30,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 function resolveGoogleError(errorCode: string): string {
   return (
-    ERROR_MESSAGES[errorCode] ??
-    'Đăng nhập Google thất bại, vui lòng thử lại.'
+    ERROR_MESSAGES[errorCode] ?? 'Đăng nhập Google thất bại, vui lòng thử lại.'
   );
 }
 
