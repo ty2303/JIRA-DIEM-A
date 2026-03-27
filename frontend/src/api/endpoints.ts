@@ -8,6 +8,9 @@ export const ENDPOINTS = {
   },
   AUTH: {
     LOGIN: '/auth/login',
+    GOOGLE: '/auth/google',
+    GOOGLE_REDIRECT: '/auth/google/redirect',
+    GOOGLE_CALLBACK: '/auth/google/callback',
     REGISTER: '/auth/register',
     FORGOT_PASSWORD: '/auth/forgot-password',
     RESET_PASSWORD: '/auth/reset-password',
