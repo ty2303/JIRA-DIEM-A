@@ -15,6 +15,10 @@ export const router = createBrowserRouter([
         lazy: () => import('@/pages/Auth'),
       },
       {
+        path: 'auth/callback',
+        lazy: () => import('@/pages/AuthCallback'),
+      },
+      {
         path: 'forgot-password',
         lazy: () => import('@/pages/ForgotPassword'),
       },
