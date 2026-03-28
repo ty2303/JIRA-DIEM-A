@@ -5,20 +5,9 @@ import { useNavigate, useSearchParams } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthUser, useAuthStore } from '@/store/useAuthStore';
+import { type AuthPayload, useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
-
-interface GoogleCallbackData {
-  token: string;
-  id: string;
-  username: string;
-  email: string;
-  role: 'USER' | 'ADMIN';
-  authProvider: 'local' | 'google';
-  hasPassword: boolean;
-  avatar: string | null;
-}
 
 type PageState = 'loading' | 'success' | 'error';
 
@@ -77,13 +66,13 @@ export function Component() {
       }
 
       try {
-        const res = await apiClient.get<ApiResponse<GoogleCallbackData>>(
+        const res = await apiClient.get<ApiResponse<AuthPayload>>(
           ENDPOINTS.AUTH.GOOGLE_CALLBACK,
           { params: { code, state } },
         );
 
         const { token, ...user } = res.data.data;
-        login(token, user as AuthUser);
+        login(token, user);
 
         await useWishlistStore.getState().syncSession();
         useCartStore.getState().fetch();

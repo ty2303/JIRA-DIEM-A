@@ -11,37 +11,9 @@ export interface AuthUser {
   avatar: string | null;
 }
 
-type AuthUserInput = Omit<AuthUser, 'authProvider' | 'hasPassword' | 'avatar'> & {
-  authProvider?: string | null;
-  hasPassword?: boolean | null;
-  avatar?: string | null;
-};
-
-const normalizeAuthProvider = (
-  value?: string | null,
-  hasPassword?: boolean | null,
-): AuthUser['authProvider'] => {
-  const normalized = value?.toLowerCase();
-
-  if (normalized === 'google') {
-    return 'google';
-  }
-
-  if (normalized === 'local') {
-    return 'local';
-  }
-
-  return hasPassword === false ? 'google' : 'local';
-};
-
-export const normalizeAuthUser = (user: AuthUserInput): AuthUser => ({
-  ...user,
-  authProvider: normalizeAuthProvider(user.authProvider, user.hasPassword),
-  hasPassword:
-    user.hasPassword ??
-    normalizeAuthProvider(user.authProvider, user.hasPassword) === 'local',
-  avatar: user.avatar ?? null,
-});
+export interface AuthPayload extends AuthUser {
+  token: string;
+}
 
 interface AuthState {
   token: string | null;
