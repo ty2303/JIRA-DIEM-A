@@ -10,3 +10,30 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+// Google Identity Services global
+interface GoogleAccountsIdApi {
+  initialize: (config: {
+    client_id: string;
+    callback: (response: { credential?: string }) => void;
+  }) => void;
+  renderButton: (
+    element: HTMLElement,
+    config: {
+      theme?: string;
+      size?: string;
+      text?: string;
+      shape?: string;
+      width?: number;
+      logo_alignment?: string;
+    },
+  ) => void;
+}
+
+interface Window {
+  google?: {
+    accounts: {
+      id: GoogleAccountsIdApi;
+    };
+  };
+}

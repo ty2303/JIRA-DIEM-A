@@ -37,33 +37,6 @@ interface UserProfile {
   createdAt: string;
 }
 
-interface GoogleCredentialResponse {
-  credential?: string;
-}
-
-interface GoogleAccountsIdApi {
-  initialize: (config: {
-    client_id: string;
-    callback: (r: GoogleCredentialResponse) => void;
-  }) => void;
-  renderButton: (
-    el: HTMLElement,
-    cfg: {
-      theme?: string;
-      size?: string;
-      text?: string;
-      shape?: string;
-      width?: number;
-    },
-  ) => void;
-}
-
-declare global {
-  interface Window {
-    google?: { accounts: { id: GoogleAccountsIdApi } };
-  }
-}
-
 const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
 const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 

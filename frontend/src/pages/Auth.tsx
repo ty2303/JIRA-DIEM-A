@@ -29,52 +29,6 @@ import {
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
 
-interface GoogleCredentialResponse {
-  credential?: string;
-}
-
-interface GoogleIdConfiguration {
-  client_id: string;
-  callback: (response: GoogleCredentialResponse) => void;
-}
-
-interface GoogleButtonConfiguration {
-  theme?: 'outline' | 'filled_blue' | 'filled_black';
-  size?: 'large' | 'medium' | 'small';
-  text?:
-    | 'signin_with'
-    | 'signup_with'
-    | 'continue_with'
-    | 'signin'
-    | 'signup'
-    | 'continue';
-  shape?: 'rectangular' | 'pill' | 'circle' | 'square';
-  width?: number;
-  logo_alignment?: 'left' | 'center';
-}
-
-interface GoogleAccountsIdApi {
-  initialize: (config: GoogleIdConfiguration) => void;
-  renderButton: (
-    element: HTMLElement,
-    config: GoogleButtonConfiguration,
-  ) => void;
-}
-
-interface GoogleAccountsApi {
-  id: GoogleAccountsIdApi;
-}
-
-interface GoogleIdentityApi {
-  accounts: GoogleAccountsApi;
-}
-
-declare global {
-  interface Window {
-    google?: GoogleIdentityApi;
-  }
-}
-
 const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
 const GOOGLE_SCRIPT_SOURCE = 'https://accounts.google.com/gsi/client';
 
