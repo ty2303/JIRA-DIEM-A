@@ -27,7 +27,7 @@ const orderSchema = new mongoose.Schema(
     note: { type: String, default: "" },
     paymentMethod: {
       type: String,
-      enum: ["COD"],
+      enum: ["COD", "MOMO"],
       required: true,
     },
     status: {
@@ -42,8 +42,22 @@ const orderSchema = new mongoose.Schema(
     total: { type: Number, required: true, min: 0 },
     paymentStatus: {
       type: String,
-      enum: ["PAID", "UNPAID", "FAILED"],
+      // UNPAID   — COD, chưa thanh toán (mặc định cho COD)
+      // PENDING  — MoMo, đã khởi tạo yêu cầu, chờ xác nhận từ cổng thanh toán
+      // PAID     — đã thanh toán thành công
+      // FAILED   — thanh toán thất bại hoặc hết hạn
+      // REFUNDED — đã hoàn tiền
+      enum: ["UNPAID", "PENDING", "PAID", "FAILED", "REFUNDED"],
       default: "UNPAID",
+    },
+    // MoMo transaction fields
+    momoRequestId: {
+      type: String,
+      default: null,
+    },
+    momoTransactionId: {
+      type: String,
+      default: null,
     },
     cancelReason: { type: String },
     cancelledBy: { type: String, enum: ["USER", "ADMIN"] },

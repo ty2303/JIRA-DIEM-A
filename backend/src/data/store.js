@@ -323,7 +323,11 @@ export function createOrder(payload, user) {
 		items: payload.items,
 		...pricing,
 		createdAt: now(),
-		paymentStatus: "UNPAID",
+		// MoMo orders bắt đầu ở trạng thái PENDING (chờ xác nhận từ cổng thanh toán)
+		// COD orders ở trạng thái UNPAID (thanh toán khi nhận hàng)
+		paymentStatus: payload.paymentMethod === "MOMO" ? "PENDING" : "UNPAID",
+		momoRequestId: null,
+		momoTransactionId: null,
 	};
 
 	for (const item of payload.items) {

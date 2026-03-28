@@ -5,6 +5,21 @@ export type OrderStatus =
   | 'DELIVERED'
   | 'CANCELLED';
 
+export type PaymentMethod = 'COD' | 'MOMO';
+
+/** UNPAID   — COD chưa thanh toán (mặc định COD)
+ *  PENDING  — MoMo đã khởi tạo, chờ xác nhận từ cổng thanh toán
+ *  PAID     — Đã thanh toán thành công
+ *  FAILED   — Thanh toán thất bại hoặc hết hạn
+ *  REFUNDED — Đã hoàn tiền
+ */
+export type PaymentStatus =
+  | 'UNPAID'
+  | 'PENDING'
+  | 'PAID'
+  | 'FAILED'
+  | 'REFUNDED';
+
 export interface OrderItem {
   productId: string;
   productName: string;
@@ -25,7 +40,7 @@ export interface Order {
   district: string;
   ward: string;
   note?: string;
-  paymentMethod: string;
+  paymentMethod: PaymentMethod;
   status: OrderStatus;
   items: OrderItem[];
   subtotal: number;
@@ -33,9 +48,11 @@ export interface Order {
   discount: number;
   total: number;
   createdAt: string;
-  paymentStatus?: string;
+  paymentStatus: PaymentStatus;
+  momoTransactionId?: string | null;
+  momoRequestId?: string | null;
   cancelReason?: string;
-  cancelledBy?: string;
+  cancelledBy?: 'USER' | 'ADMIN';
 }
 
 export interface CreateOrderPayload {
@@ -47,7 +64,7 @@ export interface CreateOrderPayload {
   district: string;
   ward: string;
   note?: string;
-  paymentMethod: string;
+  paymentMethod: PaymentMethod;
   items: OrderItem[];
   discount?: number;
 }
@@ -58,6 +75,19 @@ export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   SHIPPING: 'Đang giao',
   DELIVERED: 'Đã giao',
   CANCELLED: 'Đã hủy',
+};
+
+export const PAYMENT_STATUS_LABEL: Record<PaymentStatus, string> = {
+  UNPAID: 'Chưa thanh toán',
+  PENDING: 'Đang xử lý',
+  PAID: 'Đã thanh toán',
+  FAILED: 'Thanh toán thất bại',
+  REFUNDED: 'Đã hoàn tiền',
+};
+
+export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  COD: 'Thanh toán khi nhận hàng',
+  MOMO: 'Ví MoMo',
 };
 
 /** Predefined cancel reasons (similar to Shopee). */
@@ -77,4 +107,12 @@ export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
   SHIPPING: 'bg-purple-50 text-purple-700',
   DELIVERED: 'bg-green-50 text-green-700',
   CANCELLED: 'bg-red-50 text-red-700',
+};
+
+export const PAYMENT_STATUS_COLOR: Record<PaymentStatus, string> = {
+  UNPAID: 'bg-gray-50 text-gray-600',
+  PENDING: 'bg-yellow-50 text-yellow-700',
+  PAID: 'bg-green-50 text-green-700',
+  FAILED: 'bg-red-50 text-red-600',
+  REFUNDED: 'bg-blue-50 text-blue-700',
 };
