@@ -11,10 +11,7 @@ export interface AuthUser {
   avatar: string | null;
 }
 
-type AuthUserInput = Omit<
-  AuthUser,
-  'authProvider' | 'hasPassword' | 'avatar'
-> & {
+type AuthUserInput = Omit<AuthUser, 'authProvider' | 'hasPassword' | 'avatar'> & {
   authProvider?: string | null;
   hasPassword?: boolean | null;
   avatar?: string | null;

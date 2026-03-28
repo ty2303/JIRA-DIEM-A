@@ -15,20 +15,9 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { normalizeAuthUser, useAuthStore } from '@/store/useAuthStore';
+import { type AuthPayload, useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
-
-interface AuthResponse {
-  token: string;
-  id: string;
-  username: string;
-  email: string;
-  role: 'USER' | 'ADMIN';
-  authProvider: 'local' | 'google';
-  hasPassword: boolean;
-  avatar: string | null;
-}
 
 interface GoogleCredentialResponse {
   credential?: string;
@@ -176,33 +165,30 @@ export function Component() {
     setError('');
   }, [isLogin]);
 
-  const completeLogin = useCallback(
-    async (payload: AuthResponse) => {
-      const { token, ...user } = payload;
-      login(token, normalizeAuthUser(user));
+  const completeLogin = async (payload: AuthResponse) => {
+    const { token, ...user } = payload;
+    login(token, normalizeAuthUser(user));
 
-      await Promise.allSettled([
-        useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
-        useCartStore.getState().fetch({ skipAuthRedirect: true }),
-      ]);
+    await Promise.allSettled([
+      useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+      useCartStore.getState().fetch({ skipAuthRedirect: true }),
+    ]);
 
-      navigate(user.role === 'ADMIN' ? '/admin' : '/');
-    },
-    [login, navigate],
-  );
+    navigate(user.role === 'ADMIN' ? '/admin' : '/');
+  };
 
   const handleGoogleCredential = useCallback(
     async (credential: string) => {
       setError('');
       setGoogleLoading(true);
 
-      try {
-        const response = await apiClient.post<ApiResponse<AuthResponse>>(
-          ENDPOINTS.AUTH.GOOGLE,
-          {
-            credential,
-          },
-        );
+    try {
+      const response = await apiClient.post<ApiResponse<AuthResponse>>(
+        ENDPOINTS.AUTH.GOOGLE,
+        {
+          credential,
+        },
+      );
 
         await completeLogin(response.data.data);
       } catch (err: unknown) {
@@ -321,7 +307,7 @@ export function Component() {
       const body = isLogin
         ? { username, password }
         : { username, email, password };
-      const res = await apiClient.post<ApiResponse<AuthResponse>>(
+      const res = await apiClient.post<ApiResponse<AuthPayload>>(
         endpoint,
         body,
       );
