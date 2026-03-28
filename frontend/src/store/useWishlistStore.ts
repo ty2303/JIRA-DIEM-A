@@ -254,7 +254,7 @@ export const useWishlistStore = create<WishlistState>()(
       reset: (options) =>
         set((state) => {
           const guestItems = options?.preserveGuest
-            ? state.itemsByOwner[GUEST_WISHLIST_KEY] ?? []
+            ? (state.itemsByOwner[GUEST_WISHLIST_KEY] ?? [])
             : [];
           const nextItemsByOwner: WishlistPersistedBuckets = guestItems.length
             ? { [GUEST_WISHLIST_KEY]: guestItems }

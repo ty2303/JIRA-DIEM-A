@@ -10,7 +10,7 @@ import {
   User,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
@@ -176,45 +176,51 @@ export function Component() {
     setError('');
   }, [isLogin]);
 
-  const completeLogin = async (payload: AuthResponse) => {
-    const { token, ...user } = payload;
-    login(token, normalizeAuthUser(user));
+  const completeLogin = useCallback(
+    async (payload: AuthResponse) => {
+      const { token, ...user } = payload;
+      login(token, normalizeAuthUser(user));
 
-    await Promise.allSettled([
-      useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
-      useCartStore.getState().fetch({ skipAuthRedirect: true }),
-    ]);
+      await Promise.allSettled([
+        useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+        useCartStore.getState().fetch({ skipAuthRedirect: true }),
+      ]);
 
-    navigate(user.role === 'ADMIN' ? '/admin' : '/');
-  };
+      navigate(user.role === 'ADMIN' ? '/admin' : '/');
+    },
+    [login, navigate],
+  );
 
-  const handleGoogleCredential = async (credential: string) => {
-    setError('');
-    setGoogleLoading(true);
+  const handleGoogleCredential = useCallback(
+    async (credential: string) => {
+      setError('');
+      setGoogleLoading(true);
 
-    try {
-      const response = await apiClient.post<ApiResponse<AuthResponse>>(
-        ENDPOINTS.AUTH.GOOGLE,
-        {
-          credential,
-        },
-      );
+      try {
+        const response = await apiClient.post<ApiResponse<AuthResponse>>(
+          ENDPOINTS.AUTH.GOOGLE,
+          {
+            credential,
+          },
+        );
 
-      await completeLogin(response.data.data);
-    } catch (err: unknown) {
-      const axiosErr = err as {
-        response?: {
-          data?: { message?: string };
+        await completeLogin(response.data.data);
+      } catch (err: unknown) {
+        const axiosErr = err as {
+          response?: {
+            data?: { message?: string };
+          };
         };
-      };
-      setError(
-        axiosErr.response?.data?.message ??
-          'Không thể đăng nhập Google, vui lòng thử lại',
-      );
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
+        setError(
+          axiosErr.response?.data?.message ??
+            'Không thể đăng nhập Google, vui lòng thử lại',
+        );
+      } finally {
+        setGoogleLoading(false);
+      }
+    },
+    [completeLogin],
+  );
 
   useEffect(() => {
     let active = true;
@@ -276,7 +282,7 @@ export function Component() {
     return () => {
       active = false;
     };
-  }, [googleClientId, isLogin]);
+  }, [googleClientId, handleGoogleCredential, isLogin]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

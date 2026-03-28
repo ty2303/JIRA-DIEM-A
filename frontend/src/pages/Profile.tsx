@@ -360,11 +360,15 @@ function Profile() {
                 <div className="rounded-xl bg-surface-alt px-4 py-4 text-sm leading-6 text-text-secondary">
                   <p className="font-medium text-text-primary">
                     Tài khoản của bạn đang đăng nhập bằng{' '}
-                    {authProvider === 'google' ? 'Google' : 'nhà cung cấp bên ngoài'}.
+                    {authProvider === 'google'
+                      ? 'Google'
+                      : 'nhà cung cấp bên ngoài'}
+                    .
                   </p>
                   <p className="mt-2">
-                    Hiện chưa có mật khẩu cục bộ được cấu hình cho tài khoản này,
-                    nên bạn không cần nhập hoặc đổi mật khẩu trong ứng dụng.
+                    Hiện chưa có mật khẩu cục bộ được cấu hình cho tài khoản
+                    này, nên bạn không cần nhập hoặc đổi mật khẩu trong ứng
+                    dụng.
                   </p>
                 </div>
               )}

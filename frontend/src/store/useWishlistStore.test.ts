@@ -145,11 +145,15 @@ describe('useWishlistStore', () => {
 
     await useWishlistStore.getState().syncSession();
 
-    expect(apiClientMock.post).toHaveBeenCalledWith('/wishlist/sync', {
-      productIds: [product.id],
-    }, {
-      skipAuthRedirect: undefined,
-    });
+    expect(apiClientMock.post).toHaveBeenCalledWith(
+      '/wishlist/sync',
+      {
+        productIds: [product.id],
+      },
+      {
+        skipAuthRedirect: undefined,
+      },
+    );
     expect(useWishlistStore.getState().items).toEqual([product]);
     expect(useWishlistStore.getState().itemsByOwner.guest).toBeUndefined();
     expect(useWishlistStore.getState().itemsByOwner['user-1']).toEqual([

@@ -200,6 +200,8 @@ describe('Profile order history summary', () => {
     expect(
       await screen.findByText(/đăng nhập bằng google/i),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText('Mật khẩu hiện tại')).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Mật khẩu hiện tại'),
+    ).not.toBeInTheDocument();
   });
 });

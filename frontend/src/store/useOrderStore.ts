@@ -98,7 +98,7 @@ export const useOrderStore = create<OrderState>((set, get) => ({
               cancelledBy: 'USER',
             }
           : o,
-        ),
+      ),
     });
   },
 

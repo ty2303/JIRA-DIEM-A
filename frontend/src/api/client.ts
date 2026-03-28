@@ -54,7 +54,8 @@ apiClient.interceptors.response.use(
     ) {
       if (!isHandlingUnauthorized) {
         isHandlingUnauthorized = true;
-        const { clearClientSession } = await import('@/utils/clearClientSession');
+        const { clearClientSession } =
+          await import('@/utils/clearClientSession');
         clearClientSession();
         window.location.href = '/login';
       }
