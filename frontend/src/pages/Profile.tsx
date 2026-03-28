@@ -2,16 +2,18 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardList,
+  Globe,
   KeyRound,
   Loader2,
   Lock,
   Package,
   ShieldCheck,
+  Unlink,
   User,
   XCircle,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 
 import apiClient from '@/api/client';
@@ -31,7 +33,66 @@ interface UserProfile {
   authProvider: 'local' | 'google';
   hasPassword: boolean;
   avatar: string | null;
+  googleId?: string | null;
   createdAt: string;
+}
+
+interface GoogleCredentialResponse {
+  credential?: string;
+}
+
+interface GoogleAccountsIdApi {
+  initialize: (config: {
+    client_id: string;
+    callback: (r: GoogleCredentialResponse) => void;
+  }) => void;
+  renderButton: (
+    el: HTMLElement,
+    cfg: {
+      theme?: string;
+      size?: string;
+      text?: string;
+      shape?: string;
+      width?: number;
+    },
+  ) => void;
+}
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: GoogleAccountsIdApi } };
+  }
+}
+
+const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
+const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
+
+function loadGoogleScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.google?.accounts?.id) return resolve();
+    const existing = document.getElementById(
+      GOOGLE_SCRIPT_ID,
+    ) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener(
+        'error',
+        () => reject(new Error('load-error')),
+        {
+          once: true,
+        },
+      );
+      return;
+    }
+    const s = document.createElement('script');
+    s.id = GOOGLE_SCRIPT_ID;
+    s.src = GOOGLE_SCRIPT_SRC;
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('load-error'));
+    document.head.appendChild(s);
+  });
 }
 
 export const Component = Profile;
@@ -57,6 +118,14 @@ function Profile() {
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
+
+  // Google linking
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
+  const googleLinkButtonRef = useRef<HTMLDivElement | null>(null);
+  const [googleLinkReady, setGoogleLinkReady] = useState(false);
+  const [googleLinkError, setGoogleLinkError] = useState('');
+  const [googleLinkLoading, setGoogleLinkLoading] = useState(false);
+  const [unlinkLoading, setUnlinkLoading] = useState(false);
 
   // Orders
   const orders = useOrderStore((s) => s.orders);
@@ -134,6 +203,92 @@ function Profile() {
 
   const canCancel = (status: string) =>
     status === 'PENDING' || status === 'CONFIRMED';
+
+  const isGoogleLinked = Boolean(profile?.googleId);
+
+  const handleLinkGoogle = async (credential: string) => {
+    setGoogleLinkError('');
+    setGoogleLinkLoading(true);
+    try {
+      const res = await apiClient.post<ApiResponse<UserProfile>>(
+        ENDPOINTS.USERS.LINK_GOOGLE,
+        { credential },
+      );
+      const updated = res.data.data;
+      setProfile(updated);
+      syncUser(updated);
+      addToast('success', 'Liên kết tài khoản Google thành công!');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setGoogleLinkError(
+        axiosErr.response?.data?.message ??
+          'Không thể liên kết Google, vui lòng thử lại',
+      );
+    } finally {
+      setGoogleLinkLoading(false);
+    }
+  };
+
+  const handleUnlinkGoogle = async () => {
+    setGoogleLinkError('');
+    setUnlinkLoading(true);
+    try {
+      const res = await apiClient.delete<ApiResponse<UserProfile>>(
+        ENDPOINTS.USERS.UNLINK_GOOGLE,
+      );
+      const updated = res.data.data;
+      setProfile(updated);
+      syncUser(updated);
+      addToast('success', 'Hủy liên kết Google thành công!');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setGoogleLinkError(
+        axiosErr.response?.data?.message ??
+          'Không thể hủy liên kết Google, vui lòng thử lại',
+      );
+    } finally {
+      setUnlinkLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isGoogleLinked || !googleClientId || !profile) return;
+
+    let active = true;
+
+    const init = async () => {
+      try {
+        await loadGoogleScript();
+        if (!active || !googleLinkButtonRef.current || !window.google) return;
+
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            if (!active || !response.credential) return;
+            void handleLinkGoogle(response.credential);
+          },
+        });
+
+        googleLinkButtonRef.current.replaceChildren();
+        window.google.accounts.id.renderButton(googleLinkButtonRef.current, {
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          width: 360,
+        });
+        setGoogleLinkReady(true);
+      } catch {
+        if (active) setGoogleLinkReady(false);
+      }
+    };
+
+    void init();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGoogleLinked, googleClientId, profile?.id]);
 
   const initial = (user?.username ?? 'U').charAt(0).toUpperCase();
   const effectiveProfile = profile ?? user;
@@ -263,6 +418,103 @@ function Profile() {
                     </div>
                   ))}
                 </dl>
+              )}
+            </div>
+
+            {/* Google linking card */}
+            <div className="card p-6">
+              <h2 className="mb-4 flex items-center gap-2 font-display text-base font-semibold text-text-primary">
+                <Globe className="h-4 w-4 text-brand" />
+                Liên kết tài khoản Google
+              </h2>
+
+              {isGoogleLinked ? (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 rounded-xl bg-green-50 px-4 py-3">
+                    {profile?.avatar ? (
+                      <img
+                        src={profile.avatar}
+                        alt="Google avatar"
+                        className="h-9 w-9 rounded-full"
+                      />
+                    ) : (
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand/10">
+                        <Globe className="h-4 w-4 text-brand" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-green-800">
+                        Đã liên kết với Google
+                      </p>
+                      <p className="truncate text-xs text-green-600">
+                        {profile?.email}
+                      </p>
+                    </div>
+                  </div>
+
+                  {hasPassword && (
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-text-muted">
+                        Bạn vẫn có thể đăng nhập bằng mật khẩu.
+                      </p>
+                      <motion.button
+                        type="button"
+                        onClick={handleUnlinkGoogle}
+                        disabled={unlinkLoading}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100 disabled:opacity-60"
+                      >
+                        {unlinkLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Unlink className="h-3.5 w-3.5" />
+                        )}
+                        Hủy liên kết
+                      </motion.button>
+                    </div>
+                  )}
+
+                  {googleLinkError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {googleLinkError}
+                    </p>
+                  )}
+                </div>
+              ) : googleClientId ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-text-secondary">
+                    Liên kết tài khoản Google để đăng nhập nhanh hơn.
+                  </p>
+                  <div
+                    ref={googleLinkButtonRef}
+                    className="flex min-h-10 items-center"
+                  />
+                  {!googleLinkReady && (
+                    <p className="text-xs text-text-muted">
+                      Đang tải Google Sign-In...
+                    </p>
+                  )}
+                  {googleLinkLoading && (
+                    <p className="flex items-center gap-2 text-xs text-text-muted">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Đang liên kết...
+                    </p>
+                  )}
+                  {googleLinkError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {googleLinkError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  Tính năng này yêu cầu cấu hình{' '}
+                  <code className="rounded bg-surface-alt px-1 py-0.5 text-xs">
+                    VITE_GOOGLE_CLIENT_ID
+                  </code>
+                  .
+                </p>
               )}
             </div>
 
