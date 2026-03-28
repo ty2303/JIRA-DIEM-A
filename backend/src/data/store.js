@@ -279,12 +279,11 @@ export function getUserByToken(token) {
 export function sanitizeUser(user) {
 	// Nếu là Mongoose document, convert sang plain object
 	const plainUser = user.toObject ? user.toObject() : { ...user };
-	const { password, __v, ...safeUser } = plainUser;
+	const { password, __v, googleId, _id, ...safeUser } = plainUser;
 
 	return {
-		id: plainUser._id?.toString() ?? plainUser.id,
+		id: _id?.toString() ?? plainUser.id,
 		...safeUser,
-		_id: undefined,
 	};
 }
 
