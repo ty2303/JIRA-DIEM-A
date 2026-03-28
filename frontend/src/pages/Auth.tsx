@@ -10,68 +10,24 @@ import {
   User,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthUser, useAuthStore } from '@/store/useAuthStore';
+import {
+  type AuthPayload,
+  normalizeAuthUser,
+  useAuthStore,
+} from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
-
-interface AuthResponse {
-  token: string;
-  id: string;
-  username: string;
-  email: string;
-  role: 'USER' | 'ADMIN';
-}
-
-interface GoogleCredentialResponse {
-  credential?: string;
-}
-
-interface GoogleIdConfiguration {
-  client_id: string;
-  callback: (response: GoogleCredentialResponse) => void;
-}
-
-interface GoogleButtonConfiguration {
-  theme?: 'outline' | 'filled_blue' | 'filled_black';
-  size?: 'large' | 'medium' | 'small';
-  text?:
-    | 'signin_with'
-    | 'signup_with'
-    | 'continue_with'
-    | 'signin'
-    | 'signup'
-    | 'continue';
-  shape?: 'rectangular' | 'pill' | 'circle' | 'square';
-  width?: number;
-  logo_alignment?: 'left' | 'center';
-}
-
-interface GoogleAccountsIdApi {
-  initialize: (config: GoogleIdConfiguration) => void;
-  renderButton: (
-    element: HTMLElement,
-    config: GoogleButtonConfiguration,
-  ) => void;
-}
-
-interface GoogleAccountsApi {
-  id: GoogleAccountsIdApi;
-}
-
-interface GoogleIdentityApi {
-  accounts: GoogleAccountsApi;
-}
-
-declare global {
-  interface Window {
-    google?: GoogleIdentityApi;
-  }
-}
 
 const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
 const GOOGLE_SCRIPT_SOURCE = 'https://accounts.google.com/gsi/client';
@@ -173,41 +129,51 @@ export function Component() {
     setError('');
   }, [isLogin]);
 
-  const completeLogin = async (payload: AuthResponse) => {
-    const { token, ...user } = payload;
-    login(token, user as AuthUser);
-    await useWishlistStore.getState().syncSession();
-    useCartStore.getState().fetch();
-    navigate(user.role === 'ADMIN' ? '/admin' : '/');
-  };
+  const completeLogin = useCallback(
+    async (payload: AuthPayload) => {
+      const { token, ...user } = payload;
+      login(token, normalizeAuthUser(user));
 
-  const handleGoogleCredential = async (credential: string) => {
-    setError('');
-    setGoogleLoading(true);
+      await Promise.allSettled([
+        useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+        useCartStore.getState().fetch({ skipAuthRedirect: true }),
+      ]);
 
-    try {
-      const response = await apiClient.post<ApiResponse<AuthResponse>>(
-        ENDPOINTS.AUTH.GOOGLE,
-        {
-          credential,
-        },
-      );
+      navigate(user.role === 'ADMIN' ? '/admin' : '/');
+    },
+    [login, navigate],
+  );
 
-      await completeLogin(response.data.data);
-    } catch (err: unknown) {
-      const axiosErr = err as {
-        response?: {
-          data?: { message?: string };
+  const handleGoogleCredential = useCallback(
+    async (credential: string) => {
+      setError('');
+      setGoogleLoading(true);
+
+      try {
+        const response = await apiClient.post<ApiResponse<AuthPayload>>(
+          ENDPOINTS.AUTH.GOOGLE,
+          {
+            credential,
+          },
+        );
+
+        await completeLogin(response.data.data);
+      } catch (err: unknown) {
+        const axiosErr = err as {
+          response?: {
+            data?: { message?: string };
+          };
         };
-      };
-      setError(
-        axiosErr.response?.data?.message ??
-          'Không thể đăng nhập Google, vui lòng thử lại',
-      );
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
+        setError(
+          axiosErr.response?.data?.message ??
+            'Không thể đăng nhập Google, vui lòng thử lại',
+        );
+      } finally {
+        setGoogleLoading(false);
+      }
+    },
+    [completeLogin],
+  );
 
   useEffect(() => {
     let active = true;
@@ -269,7 +235,7 @@ export function Component() {
     return () => {
       active = false;
     };
-  }, [googleClientId, isLogin]);
+  }, [googleClientId, handleGoogleCredential, isLogin]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -308,7 +274,7 @@ export function Component() {
       const body = isLogin
         ? { username, password }
         : { username, email, password };
-      const res = await apiClient.post<ApiResponse<AuthResponse>>(
+      const res = await apiClient.post<ApiResponse<AuthPayload>>(
         endpoint,
         body,
       );

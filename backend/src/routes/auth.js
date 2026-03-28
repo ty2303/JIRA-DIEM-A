@@ -32,7 +32,7 @@ class AuthRouteError extends Error {
   }
 }
 
-function getGoogleVerifier() {
+export function getGoogleVerifier() {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
   if (!clientId) {
     return null;
@@ -91,7 +91,7 @@ function isValidEmail(email) {
   return GOOGLE_EMAIL_REGEX.test(email);
 }
 
-function normalizeGoogleIdentity(profile, { requireVerifiedEmail = false } = {}) {
+export function normalizeGoogleIdentity(profile, { requireVerifiedEmail = false } = {}) {
   const googleId = typeof profile?.sub === "string" ? profile.sub.trim() : "";
   const email = typeof profile?.email === "string" ? profile.email.trim().toLowerCase() : "";
   const name = typeof profile?.name === "string" ? profile.name.trim() : "";

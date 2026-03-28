@@ -2,16 +2,18 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardList,
+  Globe,
   KeyRound,
   Loader2,
   Lock,
   Package,
   ShieldCheck,
+  Unlink,
   User,
   XCircle,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 
 import apiClient from '@/api/client';
@@ -28,13 +30,49 @@ interface UserProfile {
   username: string;
   email: string;
   role: 'USER' | 'ADMIN';
+  authProvider: 'local' | 'google';
+  hasPassword: boolean;
+  avatar: string | null;
+  googleId?: string | null;
   createdAt: string;
+}
+
+const GOOGLE_SCRIPT_ID = 'google-identity-service-script';
+const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
+
+function loadGoogleScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.google?.accounts?.id) return resolve();
+    const existing = document.getElementById(
+      GOOGLE_SCRIPT_ID,
+    ) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener(
+        'error',
+        () => reject(new Error('load-error')),
+        {
+          once: true,
+        },
+      );
+      return;
+    }
+    const s = document.createElement('script');
+    s.id = GOOGLE_SCRIPT_ID;
+    s.src = GOOGLE_SCRIPT_SRC;
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('load-error'));
+    document.head.appendChild(s);
+  });
 }
 
 export const Component = Profile;
 
 function Profile() {
-  const { user } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const syncUser = useAuthStore((state) => state.syncUser);
   const addToast = useToastStore((s) => s.addToast);
   const location = useLocation();
   const locationState = location.state as { tab?: string } | null;
@@ -54,6 +92,14 @@ function Profile() {
   const [passwordSuccess, setPasswordSuccess] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
 
+  // Google linking
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
+  const googleLinkButtonRef = useRef<HTMLDivElement | null>(null);
+  const [googleLinkReady, setGoogleLinkReady] = useState(false);
+  const [googleLinkError, setGoogleLinkError] = useState('');
+  const [googleLinkLoading, setGoogleLinkLoading] = useState(false);
+  const [unlinkLoading, setUnlinkLoading] = useState(false);
+
   // Orders
   const orders = useOrderStore((s) => s.orders);
   const ordersLoading = useOrderStore((s) => s.isLoading);
@@ -70,9 +116,15 @@ function Profile() {
     setProfileLoading(true);
     apiClient
       .get<ApiResponse<UserProfile>>(ENDPOINTS.USERS.ME)
-      .then((res) => setProfile(res.data.data))
+      .then((res) => {
+        setProfile(res.data.data);
+        syncUser(res.data.data);
+      })
+      .catch(() => {
+        setProfile(null);
+      })
       .finally(() => setProfileLoading(false));
-  }, []);
+  }, [syncUser]);
 
   useEffect(() => {
     if (activeTab !== 'orders') return;
@@ -125,7 +177,96 @@ function Profile() {
   const canCancel = (status: string) =>
     status === 'PENDING' || status === 'CONFIRMED';
 
+  const isGoogleLinked = Boolean(profile?.googleId);
+
+  const handleLinkGoogle = async (credential: string) => {
+    setGoogleLinkError('');
+    setGoogleLinkLoading(true);
+    try {
+      const res = await apiClient.post<ApiResponse<UserProfile>>(
+        ENDPOINTS.USERS.LINK_GOOGLE,
+        { credential },
+      );
+      const updated = res.data.data;
+      setProfile(updated);
+      syncUser(updated);
+      addToast('success', 'Liên kết tài khoản Google thành công!');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setGoogleLinkError(
+        axiosErr.response?.data?.message ??
+          'Không thể liên kết Google, vui lòng thử lại',
+      );
+    } finally {
+      setGoogleLinkLoading(false);
+    }
+  };
+
+  const handleUnlinkGoogle = async () => {
+    setGoogleLinkError('');
+    setUnlinkLoading(true);
+    try {
+      const res = await apiClient.delete<ApiResponse<UserProfile>>(
+        ENDPOINTS.USERS.UNLINK_GOOGLE,
+      );
+      const updated = res.data.data;
+      setProfile(updated);
+      syncUser(updated);
+      addToast('success', 'Hủy liên kết Google thành công!');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setGoogleLinkError(
+        axiosErr.response?.data?.message ??
+          'Không thể hủy liên kết Google, vui lòng thử lại',
+      );
+    } finally {
+      setUnlinkLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isGoogleLinked || !googleClientId || !profile) return;
+
+    let active = true;
+
+    const init = async () => {
+      try {
+        await loadGoogleScript();
+        if (!active || !googleLinkButtonRef.current || !window.google) return;
+
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            if (!active || !response.credential) return;
+            void handleLinkGoogle(response.credential);
+          },
+        });
+
+        googleLinkButtonRef.current.replaceChildren();
+        window.google.accounts.id.renderButton(googleLinkButtonRef.current, {
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          width: 360,
+        });
+        setGoogleLinkReady(true);
+      } catch {
+        if (active) setGoogleLinkReady(false);
+      }
+    };
+
+    void init();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGoogleLinked, googleClientId, profile?.id]);
+
   const initial = (user?.username ?? 'U').charAt(0).toUpperCase();
+  const effectiveProfile = profile ?? user;
+  const hasPassword = effectiveProfile?.hasPassword ?? true;
+  const authProvider = effectiveProfile?.authProvider ?? 'local';
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-24 lg:py-32">
@@ -135,9 +276,17 @@ function Profile() {
         animate={{ opacity: 1, y: 0 }}
         className="mb-8 flex items-center gap-5"
       >
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand text-2xl font-bold text-white">
-          {initial}
-        </div>
+        {user?.avatar ? (
+          <img
+            src={user.avatar}
+            alt={user.username}
+            className="h-16 w-16 rounded-2xl object-cover"
+          />
+        ) : (
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand text-2xl font-bold text-white">
+            {initial}
+          </div>
+        )}
         <div>
           <h1 className="font-display text-2xl font-bold text-text-primary">
             {user?.username}
@@ -245,98 +394,212 @@ function Profile() {
               )}
             </div>
 
+            {/* Google linking card */}
+            <div className="card p-6">
+              <h2 className="mb-4 flex items-center gap-2 font-display text-base font-semibold text-text-primary">
+                <Globe className="h-4 w-4 text-brand" />
+                Liên kết tài khoản Google
+              </h2>
+
+              {isGoogleLinked ? (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 rounded-xl bg-green-50 px-4 py-3">
+                    {profile?.avatar ? (
+                      <img
+                        src={profile.avatar}
+                        alt="Google avatar"
+                        className="h-9 w-9 rounded-full"
+                      />
+                    ) : (
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand/10">
+                        <Globe className="h-4 w-4 text-brand" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-green-800">
+                        Đã liên kết với Google
+                      </p>
+                      <p className="truncate text-xs text-green-600">
+                        {profile?.email}
+                      </p>
+                    </div>
+                  </div>
+
+                  {hasPassword && (
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-text-muted">
+                        Bạn vẫn có thể đăng nhập bằng mật khẩu.
+                      </p>
+                      <motion.button
+                        type="button"
+                        onClick={handleUnlinkGoogle}
+                        disabled={unlinkLoading}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100 disabled:opacity-60"
+                      >
+                        {unlinkLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Unlink className="h-3.5 w-3.5" />
+                        )}
+                        Hủy liên kết
+                      </motion.button>
+                    </div>
+                  )}
+
+                  {googleLinkError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {googleLinkError}
+                    </p>
+                  )}
+                </div>
+              ) : googleClientId ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-text-secondary">
+                    Liên kết tài khoản Google để đăng nhập nhanh hơn.
+                  </p>
+                  <div
+                    ref={googleLinkButtonRef}
+                    className="flex min-h-10 items-center"
+                  />
+                  {!googleLinkReady && (
+                    <p className="text-xs text-text-muted">
+                      Đang tải Google Sign-In...
+                    </p>
+                  )}
+                  {googleLinkLoading && (
+                    <p className="flex items-center gap-2 text-xs text-text-muted">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Đang liên kết...
+                    </p>
+                  )}
+                  {googleLinkError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {googleLinkError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  Tính năng này yêu cầu cấu hình{' '}
+                  <code className="rounded bg-surface-alt px-1 py-0.5 text-xs">
+                    VITE_GOOGLE_CLIENT_ID
+                  </code>
+                  .
+                </p>
+              )}
+            </div>
+
             {/* Password card */}
             <div className="card p-6">
               <h2 className="mb-4 flex items-center gap-2 font-display text-base font-semibold text-text-primary">
                 <KeyRound className="h-4 w-4 text-brand" />
-                Đổi mật khẩu
+                {hasPassword ? 'Đổi mật khẩu' : 'Phương thức đăng nhập'}
               </h2>
 
-              <form onSubmit={handleChangePassword} className="space-y-4">
-                <div className="space-y-1">
-                  <label
-                    htmlFor="currentPassword"
-                    className="text-xs font-medium text-text-secondary"
-                  >
-                    Mật khẩu hiện tại
-                  </label>
-                  <div className="relative">
-                    <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
-                    <input
-                      id="currentPassword"
-                      type="password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
-                      placeholder="••••••••"
-                    />
-                  </div>
-                </div>
-
-                {[
-                  {
-                    id: 'newPassword',
-                    label: 'Mật khẩu mới',
-                    value: newPassword,
-                    onChange: setNewPassword,
-                  },
-                  {
-                    id: 'confirmPassword',
-                    label: 'Nhập lại mật khẩu mới',
-                    value: confirmPassword,
-                    onChange: setConfirmPassword,
-                  },
-                ].map((field) => (
-                  <div key={field.id} className="space-y-1">
+              {hasPassword ? (
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="space-y-1">
                     <label
-                      htmlFor={field.id}
+                      htmlFor="currentPassword"
                       className="text-xs font-medium text-text-secondary"
                     >
-                      {field.label}
+                      Mật khẩu hiện tại
                     </label>
                     <div className="relative">
                       <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
                       <input
-                        id={field.id}
+                        id="currentPassword"
                         type="password"
-                        value={field.value}
-                        onChange={(e) => field.onChange(e.target.value)}
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
                         required
-                        minLength={6}
                         className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
                         placeholder="••••••••"
                       />
                     </div>
                   </div>
-                ))}
 
-                {passwordError && (
-                  <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
-                    {passwordError}
-                  </p>
-                )}
-                {passwordSuccess && (
-                  <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">
-                    {passwordSuccess}
-                  </p>
-                )}
+                  {[
+                    {
+                      id: 'newPassword',
+                      label: 'Mật khẩu mới',
+                      value: newPassword,
+                      onChange: setNewPassword,
+                    },
+                    {
+                      id: 'confirmPassword',
+                      label: 'Nhập lại mật khẩu mới',
+                      value: confirmPassword,
+                      onChange: setConfirmPassword,
+                    },
+                  ].map((field) => (
+                    <div key={field.id} className="space-y-1">
+                      <label
+                        htmlFor={field.id}
+                        className="text-xs font-medium text-text-secondary"
+                      >
+                        {field.label}
+                      </label>
+                      <div className="relative">
+                        <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
+                        <input
+                          id={field.id}
+                          type="password"
+                          value={field.value}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          required
+                          minLength={6}
+                          className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
+                          placeholder="••••••••"
+                        />
+                      </div>
+                    </div>
+                  ))}
 
-                <div className="flex justify-end">
-                  <motion.button
-                    type="submit"
-                    disabled={passwordLoading}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="btn-primary flex cursor-pointer items-center gap-2 disabled:opacity-60"
-                  >
-                    {passwordLoading && (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    )}
-                    Lưu thay đổi
-                  </motion.button>
+                  {passwordError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {passwordError}
+                    </p>
+                  )}
+                  {passwordSuccess && (
+                    <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">
+                      {passwordSuccess}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end">
+                    <motion.button
+                      type="submit"
+                      disabled={passwordLoading}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="btn-primary flex cursor-pointer items-center gap-2 disabled:opacity-60"
+                    >
+                      {passwordLoading && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
+                      Lưu thay đổi
+                    </motion.button>
+                  </div>
+                </form>
+              ) : (
+                <div className="rounded-xl bg-surface-alt px-4 py-4 text-sm leading-6 text-text-secondary">
+                  <p className="font-medium text-text-primary">
+                    Tài khoản của bạn đang đăng nhập bằng{' '}
+                    {authProvider === 'google'
+                      ? 'Google'
+                      : 'nhà cung cấp bên ngoài'}
+                    .
+                  </p>
+                  <p className="mt-2">
+                    Hiện chưa có mật khẩu cục bộ được cấu hình cho tài khoản
+                    này, nên bạn không cần nhập hoặc đổi mật khẩu trong ứng
+                    dụng.
+                  </p>
                 </div>
-              </form>
+              )}
             </div>
           </motion.div>
         ) : (

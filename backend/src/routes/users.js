@@ -4,6 +4,7 @@ import { db, paginate, sanitizeUser } from "../data/store.js";
 import { fail, ok } from "../lib/apiResponse.js";
 import { sendToUser } from "../lib/realtime.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
+import { getGoogleVerifier, normalizeGoogleIdentity } from "../routes/auth.js";
 
 export const usersRouter = express.Router();
 
@@ -104,6 +105,131 @@ usersRouter.put("/me/password", requireAuth, async (req, res) => {
   }
   user.password = newPassword;
   res.json(ok(null, "Đổi mật khẩu thành công"));
+});
+
+/**
+ * POST /api/users/me/google
+ * Liên kết tài khoản Google với tài khoản hiện tại bằng Google ID token.
+ */
+usersRouter.post("/me/google", requireAuth, async (req, res) => {
+  const { credential } = req.body;
+
+  if (typeof credential !== "string" || credential.trim().length === 0) {
+    return res.status(400).json(fail("Thiếu Google credential", 400));
+  }
+
+  const googleVerifier = getGoogleVerifier();
+  if (!googleVerifier) {
+    return res.status(503).json(fail("Google login chưa được cấu hình trên máy chủ (thiếu GOOGLE_CLIENT_ID)", 503));
+  }
+
+  let googleProfile;
+  try {
+    const ticket = await googleVerifier.client.verifyIdToken({
+      idToken: credential.trim(),
+      audience: googleVerifier.clientId,
+    });
+    googleProfile = normalizeGoogleIdentity(ticket.getPayload(), { requireVerifiedEmail: true });
+  } catch {
+    return res.status(401).json(fail("Google token không hợp lệ hoặc đã hết hạn", 401));
+  }
+
+  try {
+    // Kiểm tra googleId đã được dùng bởi user khác chưa
+    const conflictByGoogleId = await User.findOne({ googleId: googleProfile.googleId });
+    if (conflictByGoogleId && conflictByGoogleId._id.toString() !== req.user.id) {
+      return res.status(409).json(fail("Tài khoản Google này đã được liên kết với một tài khoản khác", 409));
+    }
+
+    const mongoUser = await User.findById(req.user.id);
+    if (mongoUser) {
+      if (mongoUser.googleId) {
+        return res.status(409).json(fail("Tài khoản của bạn đã được liên kết với Google", 409));
+      }
+
+      mongoUser.googleId = googleProfile.googleId;
+      mongoUser.authProvider = "google";
+      if (!mongoUser.avatar && googleProfile.avatar) {
+        mongoUser.avatar = googleProfile.avatar;
+      }
+      await mongoUser.save();
+
+      return res.json(ok(sanitizeUser(mongoUser), "Liên kết tài khoản Google thành công"));
+    }
+  } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json(fail("Tài khoản Google này đã được liên kết với một tài khoản khác", 409));
+    }
+    console.error("Link Google error:", error);
+    return res.status(503).json(fail("Không thể liên kết tài khoản Google lúc này", 503));
+  }
+
+  // Fallback: in-memory store
+  const memUser = db.users.find((u) => u.id === req.user.id);
+  if (!memUser) {
+    return res.status(404).json(fail("Không tìm thấy người dùng", 404));
+  }
+  if (memUser.googleId) {
+    return res.status(409).json(fail("Tài khoản của bạn đã được liên kết với Google", 409));
+  }
+  const conflictInMem = db.users.find((u) => u.googleId === googleProfile.googleId && u.id !== req.user.id);
+  if (conflictInMem) {
+    return res.status(409).json(fail("Tài khoản Google này đã được liên kết với một tài khoản khác", 409));
+  }
+
+  memUser.googleId = googleProfile.googleId;
+  memUser.authProvider = "google";
+  if (!memUser.avatar && googleProfile.avatar) {
+    memUser.avatar = googleProfile.avatar;
+  }
+  return res.json(ok(sanitizeUser(memUser), "Liên kết tài khoản Google thành công"));
+});
+
+/**
+ * DELETE /api/users/me/google
+ * Hủy liên kết tài khoản Google khỏi tài khoản hiện tại.
+ * Chỉ cho phép nếu user đã có mật khẩu (tránh khóa tài khoản).
+ */
+usersRouter.delete("/me/google", requireAuth, async (req, res) => {
+  try {
+    const mongoUser = await User.findById(req.user.id);
+    if (mongoUser) {
+      if (!mongoUser.googleId) {
+        return res.status(400).json(fail("Tài khoản chưa được liên kết với Google", 400));
+      }
+      if (!mongoUser.hasPassword) {
+        return res.status(400).json(
+          fail("Không thể hủy liên kết Google vì đây là phương thức đăng nhập duy nhất. Vui lòng thiết lập mật khẩu trước.", 400),
+        );
+      }
+
+      mongoUser.googleId = undefined;
+      mongoUser.authProvider = "local";
+      await mongoUser.save();
+
+      return res.json(ok(sanitizeUser(mongoUser), "Hủy liên kết tài khoản Google thành công"));
+    }
+  } catch {
+    // Fallback
+  }
+
+  // Fallback: in-memory store
+  const memUser = db.users.find((u) => u.id === req.user.id);
+  if (!memUser) {
+    return res.status(404).json(fail("Không tìm thấy người dùng", 404));
+  }
+  if (!memUser.googleId) {
+    return res.status(400).json(fail("Tài khoản chưa được liên kết với Google", 400));
+  }
+  if (!memUser.hasPassword) {
+    return res.status(400).json(
+      fail("Không thể hủy liên kết Google vì đây là phương thức đăng nhập duy nhất. Vui lòng thiết lập mật khẩu trước.", 400),
+    );
+  }
+
+  memUser.googleId = undefined;
+  memUser.authProvider = "local";
+  return res.json(ok(sanitizeUser(memUser), "Hủy liên kết tài khoản Google thành công"));
 });
 
 /**

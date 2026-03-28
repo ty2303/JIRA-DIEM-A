@@ -46,11 +46,11 @@ interface WishlistState {
   error: string | null;
   toggle: (product: Product) => Promise<void>;
   has: (id: string) => boolean;
-  fetch: () => Promise<void>;
+  fetch: (options?: { skipAuthRedirect?: boolean }) => Promise<void>;
   clear: () => Promise<void>;
   clearLocal: () => void;
-  syncSession: () => Promise<void>;
-  reset: () => void;
+  syncSession: (options?: { skipAuthRedirect?: boolean }) => Promise<void>;
+  reset: (options?: { preserveGuest?: boolean }) => void;
 }
 
 const getOwnerKey = () =>
@@ -113,7 +113,7 @@ export const useWishlistStore = create<WishlistState>()(
 
       has: (id) => get().items.some((p) => p.id === id),
 
-      fetch: async () => {
+      fetch: async (options) => {
         const { isLoggedIn } = useAuthStore.getState();
         const ownerKey = getOwnerKey();
 
@@ -131,6 +131,9 @@ export const useWishlistStore = create<WishlistState>()(
         try {
           const res = await apiClient.get<ApiResponse<Product[]>>(
             ENDPOINTS.WISHLIST.BASE,
+            {
+              skipAuthRedirect: options?.skipAuthRedirect,
+            },
           );
           set((state) => ({
             currentOwnerKey: ownerKey,
@@ -187,7 +190,7 @@ export const useWishlistStore = create<WishlistState>()(
         }));
       },
 
-      syncSession: async () => {
+      syncSession: async (options) => {
         const { isLoggedIn } = useAuthStore.getState();
         const nextOwnerKey = getOwnerKey();
         const prevOwnerKey = get().currentOwnerKey;
@@ -217,6 +220,9 @@ export const useWishlistStore = create<WishlistState>()(
               {
                 productIds: prevGuestItems.map((item) => item.id),
               },
+              {
+                skipAuthRedirect: options?.skipAuthRedirect,
+              },
             );
             set((state) => {
               const restBuckets = { ...state.itemsByOwner };
@@ -242,16 +248,25 @@ export const useWishlistStore = create<WishlistState>()(
           return;
         }
 
-        await get().fetch();
+        await get().fetch(options);
       },
 
-      reset: () =>
-        set({
-          items: [],
-          itemsByOwner: {},
-          isLoading: false,
-          currentOwnerKey: GUEST_WISHLIST_KEY,
-          error: null,
+      reset: (options) =>
+        set((state) => {
+          const guestItems = options?.preserveGuest
+            ? (state.itemsByOwner[GUEST_WISHLIST_KEY] ?? [])
+            : [];
+          const nextItemsByOwner: WishlistPersistedBuckets = guestItems.length
+            ? { [GUEST_WISHLIST_KEY]: guestItems }
+            : {};
+
+          return {
+            items: guestItems,
+            itemsByOwner: nextItemsByOwner,
+            isLoading: false,
+            currentOwnerKey: GUEST_WISHLIST_KEY,
+            error: null,
+          };
         }),
     }),
     {
