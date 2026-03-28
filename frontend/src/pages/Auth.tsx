@@ -10,7 +10,13 @@ import {
   User,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
@@ -182,13 +188,13 @@ export function Component() {
       setError('');
       setGoogleLoading(true);
 
-    try {
-      const response = await apiClient.post<ApiResponse<AuthResponse>>(
-        ENDPOINTS.AUTH.GOOGLE,
-        {
-          credential,
-        },
-      );
+      try {
+        const response = await apiClient.post<ApiResponse<AuthResponse>>(
+          ENDPOINTS.AUTH.GOOGLE,
+          {
+            credential,
+          },
+        );
 
         await completeLogin(response.data.data);
       } catch (err: unknown) {
