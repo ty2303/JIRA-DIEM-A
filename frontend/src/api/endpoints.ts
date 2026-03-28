@@ -53,6 +53,8 @@ export const ENDPOINTS = {
   USERS: {
     ME: '/users/me',
     CHANGE_PASSWORD: '/users/me/password',
+    LINK_GOOGLE: '/users/me/google',
+    UNLINK_GOOGLE: '/users/me/google',
     ROLE: (id: string) => `/users/${id}/role`,
   },
 } as const;
