@@ -15,17 +15,9 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthUser, useAuthStore } from '@/store/useAuthStore';
+import { type AuthPayload, useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
-
-interface AuthResponse {
-  token: string;
-  id: string;
-  username: string;
-  email: string;
-  role: 'USER' | 'ADMIN';
-}
 
 interface GoogleCredentialResponse {
   credential?: string;
@@ -173,9 +165,9 @@ export function Component() {
     setError('');
   }, [isLogin]);
 
-  const completeLogin = async (payload: AuthResponse) => {
+  const completeLogin = async (payload: AuthPayload) => {
     const { token, ...user } = payload;
-    login(token, user as AuthUser);
+    login(token, user);
     await useWishlistStore.getState().syncSession();
     useCartStore.getState().fetch();
     navigate(user.role === 'ADMIN' ? '/admin' : '/');
@@ -186,7 +178,7 @@ export function Component() {
     setGoogleLoading(true);
 
     try {
-      const response = await apiClient.post<ApiResponse<AuthResponse>>(
+      const response = await apiClient.post<ApiResponse<AuthPayload>>(
         ENDPOINTS.AUTH.GOOGLE,
         {
           credential,
@@ -308,7 +300,7 @@ export function Component() {
       const body = isLogin
         ? { username, password }
         : { username, email, password };
-      const res = await apiClient.post<ApiResponse<AuthResponse>>(
+      const res = await apiClient.post<ApiResponse<AuthPayload>>(
         endpoint,
         body,
       );
