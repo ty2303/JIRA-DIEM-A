@@ -21,7 +21,11 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthPayload, useAuthStore } from '@/store/useAuthStore';
+import {
+  type AuthPayload,
+  normalizeAuthUser,
+  useAuthStore,
+} from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
 
@@ -171,17 +175,20 @@ export function Component() {
     setError('');
   }, [isLogin]);
 
-  const completeLogin = async (payload: AuthResponse) => {
-    const { token, ...user } = payload;
-    login(token, normalizeAuthUser(user));
+  const completeLogin = useCallback(
+    async (payload: AuthPayload) => {
+      const { token, ...user } = payload;
+      login(token, normalizeAuthUser(user));
 
-    await Promise.allSettled([
-      useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
-      useCartStore.getState().fetch({ skipAuthRedirect: true }),
-    ]);
+      await Promise.allSettled([
+        useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+        useCartStore.getState().fetch({ skipAuthRedirect: true }),
+      ]);
 
-    navigate(user.role === 'ADMIN' ? '/admin' : '/');
-  };
+      navigate(user.role === 'ADMIN' ? '/admin' : '/');
+    },
+    [login, navigate],
+  );
 
   const handleGoogleCredential = useCallback(
     async (credential: string) => {
@@ -189,7 +196,7 @@ export function Component() {
       setGoogleLoading(true);
 
       try {
-        const response = await apiClient.post<ApiResponse<AuthResponse>>(
+        const response = await apiClient.post<ApiResponse<AuthPayload>>(
           ENDPOINTS.AUTH.GOOGLE,
           {
             credential,

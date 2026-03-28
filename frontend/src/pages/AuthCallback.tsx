@@ -5,7 +5,11 @@ import { useNavigate, useSearchParams } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthPayload, useAuthStore } from '@/store/useAuthStore';
+import {
+  type AuthPayload,
+  normalizeAuthUser,
+  useAuthStore,
+} from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
 
@@ -72,10 +76,12 @@ export function Component() {
         );
 
         const { token, ...user } = res.data.data;
-        login(token, user);
+        login(token, normalizeAuthUser(user));
 
-        await useWishlistStore.getState().syncSession();
-        useCartStore.getState().fetch();
+        await Promise.allSettled([
+          useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+          useCartStore.getState().fetch({ skipAuthRedirect: true }),
+        ]);
 
         setPageState('success');
 

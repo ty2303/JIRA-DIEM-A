@@ -11,6 +11,10 @@ export interface AuthUser {
   avatar: string | null;
 }
 
+export interface AuthPayload extends AuthUser {
+  token: string;
+}
+
 type AuthUserInput = Omit<
   AuthUser,
   'authProvider' | 'hasPassword' | 'avatar'
