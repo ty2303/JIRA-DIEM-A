@@ -4,13 +4,15 @@ import { MemoryRouter } from 'react-router';
 
 import type { Order } from '@/types/order';
 
+const apiClientMock = {
+  get: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn(),
+  patch: vi.fn(),
+};
+
 vi.mock('@/api/client', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    patch: vi.fn(),
-  },
+  default: apiClientMock,
 }));
 
 type StorageMock = {
@@ -87,19 +89,14 @@ afterEach(() => {
 
 describe('Profile order history summary', () => {
   test('shows the summed item quantity in the collapsed order row', async () => {
-    const [
-      { Component: Profile },
-      { default: apiClient },
-      { useAuthStore },
-      { useOrderStore },
-    ] = await Promise.all([
-      import('@/pages/Profile'),
-      import('@/api/client'),
-      import('@/store/useAuthStore'),
-      import('@/store/useOrderStore'),
-    ]);
+    const [{ Component: Profile }, { useAuthStore }, { useOrderStore }] =
+      await Promise.all([
+        import('@/pages/Profile'),
+        import('@/store/useAuthStore'),
+        import('@/store/useOrderStore'),
+      ]);
 
-    vi.mocked(apiClient.get).mockResolvedValue({
+    apiClientMock.get.mockResolvedValue({
       data: {
         data: {
           id: 'user-1',
@@ -154,14 +151,12 @@ describe('Profile order history summary', () => {
   });
 
   test('shows social-login messaging instead of the password form', async () => {
-    const [{ Component: Profile }, { default: apiClient }, { useAuthStore }] =
-      await Promise.all([
-        import('@/pages/Profile'),
-        import('@/api/client'),
-        import('@/store/useAuthStore'),
-      ]);
+    const [{ Component: Profile }, { useAuthStore }] = await Promise.all([
+      import('@/pages/Profile'),
+      import('@/store/useAuthStore'),
+    ]);
 
-    vi.mocked(apiClient.get).mockResolvedValue({
+    apiClientMock.get.mockResolvedValue({
       data: {
         data: {
           id: 'user-2',

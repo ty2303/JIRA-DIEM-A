@@ -78,6 +78,9 @@ function Profile() {
         setProfile(res.data.data);
         syncUser(res.data.data);
       })
+      .catch(() => {
+        setProfile(null);
+      })
       .finally(() => setProfileLoading(false));
   }, [syncUser]);
 
