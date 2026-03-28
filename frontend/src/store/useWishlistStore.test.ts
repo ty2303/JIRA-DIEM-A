@@ -147,6 +147,8 @@ describe('useWishlistStore', () => {
 
     expect(apiClientMock.post).toHaveBeenCalledWith('/wishlist/sync', {
       productIds: [product.id],
+    }, {
+      skipAuthRedirect: undefined,
     });
     expect(useWishlistStore.getState().items).toEqual([product]);
     expect(useWishlistStore.getState().itemsByOwner.guest).toBeUndefined();
@@ -234,5 +236,30 @@ describe('useWishlistStore', () => {
     expect(useWishlistStore.getState().error).toBe(
       'Khong the xoa wishlist luc nay.',
     );
+  });
+
+  test('reset keeps the guest wishlist bucket while dropping authenticated state', async () => {
+    const { useWishlistStore } = await loadStores();
+
+    useWishlistStore.setState({
+      items: [product],
+      itemsByOwner: {
+        guest: [product],
+        'user-1': [product, product],
+      },
+      currentOwnerKey: 'user-1',
+      isLoading: true,
+      error: 'oops',
+    });
+
+    useWishlistStore.getState().reset({ preserveGuest: true });
+
+    expect(useWishlistStore.getState().currentOwnerKey).toBe('guest');
+    expect(useWishlistStore.getState().items).toEqual([product]);
+    expect(useWishlistStore.getState().itemsByOwner).toEqual({
+      guest: [product],
+    });
+    expect(useWishlistStore.getState().error).toBeNull();
+    expect(useWishlistStore.getState().isLoading).toBe(false);
   });
 });

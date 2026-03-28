@@ -33,7 +33,7 @@ interface CartState {
   updateQuantity: (productId: string, quantity: number) => Promise<void>;
   clear: () => Promise<void>;
   clearLocal: () => void;
-  fetch: () => Promise<void>;
+  fetch: (options?: { skipAuthRedirect?: boolean }) => Promise<void>;
   totalItems: () => number;
   totalPrice: () => number;
 }
@@ -193,12 +193,15 @@ export const useCartStore = create<CartState>()(
 
       clearLocal: () => set({ items: [] }),
 
-      fetch: async () => {
+      fetch: async (options) => {
         if (!useAuthStore.getState().isLoggedIn) return;
         set({ isLoading: true });
         try {
           const res = await apiClient.get<ApiResponse<ServerCart>>(
             ENDPOINTS.CART.BASE,
+            {
+              skipAuthRedirect: options?.skipAuthRedirect,
+            },
           );
           set({ items: serverToLocal(res.data.data) });
         } catch {

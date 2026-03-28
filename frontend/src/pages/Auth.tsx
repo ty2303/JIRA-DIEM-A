@@ -15,7 +15,7 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import type { ApiResponse } from '@/api/types';
-import { type AuthUser, useAuthStore } from '@/store/useAuthStore';
+import { normalizeAuthUser, useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
 
@@ -25,6 +25,9 @@ interface AuthResponse {
   username: string;
   email: string;
   role: 'USER' | 'ADMIN';
+  authProvider: 'local' | 'google';
+  hasPassword: boolean;
+  avatar: string | null;
 }
 
 interface GoogleCredentialResponse {
@@ -175,9 +178,13 @@ export function Component() {
 
   const completeLogin = async (payload: AuthResponse) => {
     const { token, ...user } = payload;
-    login(token, user as AuthUser);
-    await useWishlistStore.getState().syncSession();
-    useCartStore.getState().fetch();
+    login(token, normalizeAuthUser(user));
+
+    await Promise.allSettled([
+      useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
+      useCartStore.getState().fetch({ skipAuthRedirect: true }),
+    ]);
+
     navigate(user.role === 'ADMIN' ? '/admin' : '/');
   };
 

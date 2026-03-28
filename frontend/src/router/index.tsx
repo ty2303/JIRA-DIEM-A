@@ -51,20 +51,24 @@ export const router = createBrowserRouter([
             lazy: () => import('@/pages/Cart'),
           },
           {
-            path: 'checkout',
-            lazy: () => import('@/pages/Checkout'),
-          },
-          {
-            path: 'checkout/success',
-            lazy: () => import('@/pages/CheckoutSuccess'),
-          },
-          {
-            path: 'profile',
             Component: PrivateRoute,
             children: [
               {
-                index: true,
-                lazy: () => import('@/pages/Profile'),
+                path: 'checkout',
+                lazy: () => import('@/pages/Checkout'),
+              },
+              {
+                path: 'checkout/success',
+                lazy: () => import('@/pages/CheckoutSuccess'),
+              },
+              {
+                path: 'profile',
+                children: [
+                  {
+                    index: true,
+                    lazy: () => import('@/pages/Profile'),
+                  },
+                ],
               },
             ],
           },

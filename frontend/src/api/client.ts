@@ -2,6 +2,12 @@ import axios from 'axios';
 import { ENDPOINTS } from '@/api/endpoints';
 import { useAuthStore } from '@/store/useAuthStore';
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    skipAuthRedirect?: boolean;
+  }
+}
+
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL,
   headers: {
@@ -23,6 +29,7 @@ apiClient.interceptors.request.use(
 
 // Response interceptor
 let isRefreshingRole = false;
+let isHandlingUnauthorized = false;
 
 const AUTH_BYPASS_PATHS = [
   ENDPOINTS.AUTH.LOGIN,
@@ -42,10 +49,15 @@ apiClient.interceptors.response.use(
     // Handle global errors (401, 403, 500, etc.)
     if (
       error.response?.status === 401 &&
-      !isAuthBypassRequest(error.config?.url)
+      !isAuthBypassRequest(error.config?.url) &&
+      !error.config?.skipAuthRedirect
     ) {
-      useAuthStore.getState().logout();
-      window.location.href = '/login';
+      if (!isHandlingUnauthorized) {
+        isHandlingUnauthorized = true;
+        const { clearClientSession } = await import('@/utils/clearClientSession');
+        clearClientSession();
+        window.location.href = '/login';
+      }
     }
 
     // Handle 403: role may have been changed by another admin
@@ -81,5 +93,9 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+window.addEventListener('pageshow', () => {
+  isHandlingUnauthorized = false;
+});
 
 export default apiClient;
