@@ -15,6 +15,7 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
+import { clearClientSession } from '@/utils/clearClientSession';
 
 const navLinks = [
   { label: 'Trang chủ', href: '/' },
@@ -95,7 +96,7 @@ export default function Navbar() {
   const wishlistCount = useWishlistStore((s) => s.items.length);
   const cartCount = useCartStore((s) => s.totalItems());
   const cartSubtotal = useCartStore((s) => s.totalPrice());
-  const { isLoggedIn, isAdmin, logout } = useAuthStore();
+  const { isLoggedIn, isAdmin } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
   const currentSearchQuery =
@@ -104,8 +105,7 @@ export default function Navbar() {
   const formattedCartSubtotal = `${cartSubtotal.toLocaleString('vi-VN')}₫`;
 
   const handleLogout = () => {
-    useCartStore.getState().clearLocal();
-    logout();
+    clearClientSession();
     navigate('/login');
   };
 

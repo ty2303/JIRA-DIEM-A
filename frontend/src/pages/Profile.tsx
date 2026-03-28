@@ -28,13 +28,17 @@ interface UserProfile {
   username: string;
   email: string;
   role: 'USER' | 'ADMIN';
+  authProvider: 'local' | 'google';
+  hasPassword: boolean;
+  avatar: string | null;
   createdAt: string;
 }
 
 export const Component = Profile;
 
 function Profile() {
-  const { user } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const syncUser = useAuthStore((state) => state.syncUser);
   const addToast = useToastStore((s) => s.addToast);
   const location = useLocation();
   const locationState = location.state as { tab?: string } | null;
@@ -70,9 +74,15 @@ function Profile() {
     setProfileLoading(true);
     apiClient
       .get<ApiResponse<UserProfile>>(ENDPOINTS.USERS.ME)
-      .then((res) => setProfile(res.data.data))
+      .then((res) => {
+        setProfile(res.data.data);
+        syncUser(res.data.data);
+      })
+      .catch(() => {
+        setProfile(null);
+      })
       .finally(() => setProfileLoading(false));
-  }, []);
+  }, [syncUser]);
 
   useEffect(() => {
     if (activeTab !== 'orders') return;
@@ -126,6 +136,9 @@ function Profile() {
     status === 'PENDING' || status === 'CONFIRMED';
 
   const initial = (user?.username ?? 'U').charAt(0).toUpperCase();
+  const effectiveProfile = profile ?? user;
+  const hasPassword = effectiveProfile?.hasPassword ?? true;
+  const authProvider = effectiveProfile?.authProvider ?? 'local';
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-24 lg:py-32">
@@ -135,9 +148,17 @@ function Profile() {
         animate={{ opacity: 1, y: 0 }}
         className="mb-8 flex items-center gap-5"
       >
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand text-2xl font-bold text-white">
-          {initial}
-        </div>
+        {user?.avatar ? (
+          <img
+            src={user.avatar}
+            alt={user.username}
+            className="h-16 w-16 rounded-2xl object-cover"
+          />
+        ) : (
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand text-2xl font-bold text-white">
+            {initial}
+          </div>
+        )}
         <div>
           <h1 className="font-display text-2xl font-bold text-text-primary">
             {user?.username}
@@ -249,94 +270,111 @@ function Profile() {
             <div className="card p-6">
               <h2 className="mb-4 flex items-center gap-2 font-display text-base font-semibold text-text-primary">
                 <KeyRound className="h-4 w-4 text-brand" />
-                Đổi mật khẩu
+                {hasPassword ? 'Đổi mật khẩu' : 'Phương thức đăng nhập'}
               </h2>
 
-              <form onSubmit={handleChangePassword} className="space-y-4">
-                <div className="space-y-1">
-                  <label
-                    htmlFor="currentPassword"
-                    className="text-xs font-medium text-text-secondary"
-                  >
-                    Mật khẩu hiện tại
-                  </label>
-                  <div className="relative">
-                    <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
-                    <input
-                      id="currentPassword"
-                      type="password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
-                      placeholder="••••••••"
-                    />
-                  </div>
-                </div>
-
-                {[
-                  {
-                    id: 'newPassword',
-                    label: 'Mật khẩu mới',
-                    value: newPassword,
-                    onChange: setNewPassword,
-                  },
-                  {
-                    id: 'confirmPassword',
-                    label: 'Nhập lại mật khẩu mới',
-                    value: confirmPassword,
-                    onChange: setConfirmPassword,
-                  },
-                ].map((field) => (
-                  <div key={field.id} className="space-y-1">
+              {hasPassword ? (
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="space-y-1">
                     <label
-                      htmlFor={field.id}
+                      htmlFor="currentPassword"
                       className="text-xs font-medium text-text-secondary"
                     >
-                      {field.label}
+                      Mật khẩu hiện tại
                     </label>
                     <div className="relative">
                       <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
                       <input
-                        id={field.id}
+                        id="currentPassword"
                         type="password"
-                        value={field.value}
-                        onChange={(e) => field.onChange(e.target.value)}
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
                         required
-                        minLength={6}
                         className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
                         placeholder="••••••••"
                       />
                     </div>
                   </div>
-                ))}
 
-                {passwordError && (
-                  <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
-                    {passwordError}
-                  </p>
-                )}
-                {passwordSuccess && (
-                  <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">
-                    {passwordSuccess}
-                  </p>
-                )}
+                  {[
+                    {
+                      id: 'newPassword',
+                      label: 'Mật khẩu mới',
+                      value: newPassword,
+                      onChange: setNewPassword,
+                    },
+                    {
+                      id: 'confirmPassword',
+                      label: 'Nhập lại mật khẩu mới',
+                      value: confirmPassword,
+                      onChange: setConfirmPassword,
+                    },
+                  ].map((field) => (
+                    <div key={field.id} className="space-y-1">
+                      <label
+                        htmlFor={field.id}
+                        className="text-xs font-medium text-text-secondary"
+                      >
+                        {field.label}
+                      </label>
+                      <div className="relative">
+                        <Lock className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-text-muted" />
+                        <input
+                          id={field.id}
+                          type="password"
+                          value={field.value}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          required
+                          minLength={6}
+                          className="w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 pl-9 text-sm outline-none transition-colors focus:border-brand focus:ring-1 focus:ring-brand"
+                          placeholder="••••••••"
+                        />
+                      </div>
+                    </div>
+                  ))}
 
-                <div className="flex justify-end">
-                  <motion.button
-                    type="submit"
-                    disabled={passwordLoading}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="btn-primary flex cursor-pointer items-center gap-2 disabled:opacity-60"
-                  >
-                    {passwordLoading && (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    )}
-                    Lưu thay đổi
-                  </motion.button>
+                  {passwordError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                      {passwordError}
+                    </p>
+                  )}
+                  {passwordSuccess && (
+                    <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">
+                      {passwordSuccess}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end">
+                    <motion.button
+                      type="submit"
+                      disabled={passwordLoading}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="btn-primary flex cursor-pointer items-center gap-2 disabled:opacity-60"
+                    >
+                      {passwordLoading && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      )}
+                      Lưu thay đổi
+                    </motion.button>
+                  </div>
+                </form>
+              ) : (
+                <div className="rounded-xl bg-surface-alt px-4 py-4 text-sm leading-6 text-text-secondary">
+                  <p className="font-medium text-text-primary">
+                    Tài khoản của bạn đang đăng nhập bằng{' '}
+                    {authProvider === 'google'
+                      ? 'Google'
+                      : 'nhà cung cấp bên ngoài'}
+                    .
+                  </p>
+                  <p className="mt-2">
+                    Hiện chưa có mật khẩu cục bộ được cấu hình cho tài khoản
+                    này, nên bạn không cần nhập hoặc đổi mật khẩu trong ứng
+                    dụng.
+                  </p>
                 </div>
-              </form>
+              )}
             </div>
           </motion.div>
         ) : (

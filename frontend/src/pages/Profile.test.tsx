@@ -4,13 +4,15 @@ import { MemoryRouter } from 'react-router';
 
 import type { Order } from '@/types/order';
 
+const apiClientMock = {
+  get: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn(),
+  patch: vi.fn(),
+};
+
 vi.mock('@/api/client', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    patch: vi.fn(),
-  },
+  default: apiClientMock,
 }));
 
 type StorageMock = {
@@ -87,19 +89,14 @@ afterEach(() => {
 
 describe('Profile order history summary', () => {
   test('shows the summed item quantity in the collapsed order row', async () => {
-    const [
-      { Component: Profile },
-      { default: apiClient },
-      { useAuthStore },
-      { useOrderStore },
-    ] = await Promise.all([
-      import('@/pages/Profile'),
-      import('@/api/client'),
-      import('@/store/useAuthStore'),
-      import('@/store/useOrderStore'),
-    ]);
+    const [{ Component: Profile }, { useAuthStore }, { useOrderStore }] =
+      await Promise.all([
+        import('@/pages/Profile'),
+        import('@/store/useAuthStore'),
+        import('@/store/useOrderStore'),
+      ]);
 
-    vi.mocked(apiClient.get).mockResolvedValue({
+    apiClientMock.get.mockResolvedValue({
       data: {
         data: {
           id: 'user-1',
@@ -107,7 +104,8 @@ describe('Profile order history summary', () => {
           email: 'demo@example.com',
           role: 'USER',
           hasPassword: true,
-          authProvider: 'LOCAL',
+          authProvider: 'local',
+          avatar: null,
           createdAt: '2026-01-01T00:00:00.000Z',
         },
       },
@@ -150,5 +148,55 @@ describe('Profile order history summary', () => {
       'text-sm',
       'text-text-secondary',
     );
+  });
+
+  test('shows social-login messaging instead of the password form', async () => {
+    const [{ Component: Profile }, { useAuthStore }] = await Promise.all([
+      import('@/pages/Profile'),
+      import('@/store/useAuthStore'),
+    ]);
+
+    apiClientMock.get.mockResolvedValue({
+      data: {
+        data: {
+          id: 'user-2',
+          username: 'google-user',
+          email: 'google@example.com',
+          role: 'USER',
+          hasPassword: false,
+          authProvider: 'google',
+          avatar: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+
+    useAuthStore.setState({
+      token: 'token',
+      user: {
+        id: 'user-2',
+        username: 'google-user',
+        email: 'google@example.com',
+        role: 'USER',
+        authProvider: 'google',
+        hasPassword: false,
+        avatar: null,
+      },
+      isLoggedIn: true,
+      isAdmin: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <Profile />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(/đăng nhập bằng google/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Mật khẩu hiện tại'),
+    ).not.toBeInTheDocument();
   });
 });

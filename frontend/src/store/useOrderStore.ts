@@ -13,6 +13,7 @@ interface OrderState {
   fetchOrderById: (orderId: string) => Promise<Order | null>;
   addOrder: (order: Order) => void;
   cancelOrder: (orderId: string, reason: string) => Promise<void>;
+  reset: () => void;
 }
 
 export const useOrderStore = create<OrderState>((set, get) => ({
@@ -99,5 +100,9 @@ export const useOrderStore = create<OrderState>((set, get) => ({
           : o,
       ),
     });
+  },
+
+  reset: () => {
+    set({ orders: [], currentOrder: null, isLoading: false });
   },
 }));
