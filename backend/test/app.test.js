@@ -1276,6 +1276,242 @@ describe("Order pricing", () => {
 			removeTestOrder(orderId);
 		});
 	});
+
+	test("GET /api/orders/momo/return redirects to frontend with correct query params on success", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PENDING",
+				momoRequestId: "momo-req-return-test",
+			});
+
+			try {
+				const returnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-return-test",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "80000001",
+					resultCode: "0",
+					message: "Thành công",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				returnPayload.signature = createMomoCallbackSignature(
+					returnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const queryString = new URLSearchParams(returnPayload).toString();
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+					{ redirect: "manual" },
+				);
+
+				assert.equal(response.status, 302);
+				const location = response.headers.get("location");
+				assert.ok(location);
+				const redirectUrl = new URL(location);
+				assert.equal(redirectUrl.pathname, "/checkout/success");
+				assert.equal(redirectUrl.searchParams.get("orderId"), testOrder.id);
+				assert.equal(redirectUrl.searchParams.get("resultCode"), "0");
+				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
+
+				const order = db.orders.find((item) => item.id === testOrder.id);
+				assert.equal(order?.paymentStatus, "PAID");
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
+
+	test("GET /api/orders/momo/return redirects with failure resultCode when payment fails", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PENDING",
+				momoRequestId: "momo-req-return-fail",
+			});
+
+			try {
+				const returnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-return-fail",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "80000002",
+					resultCode: "1006",
+					message: "Transaction rejected by user",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				returnPayload.signature = createMomoCallbackSignature(
+					returnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const queryString = new URLSearchParams(returnPayload).toString();
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+					{ redirect: "manual" },
+				);
+
+				assert.equal(response.status, 302);
+				const location = response.headers.get("location");
+				assert.ok(location);
+				const redirectUrl = new URL(location);
+				assert.equal(redirectUrl.searchParams.get("resultCode"), "1006");
+				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
+
+	test("GET /api/orders/momo/return redirects with error when orderId is missing", async () => {
+		await withServer(async (port) => {
+			const response = await fetch(
+				`http://127.0.0.1:${port}/api/orders/momo/return?resultCode=0`,
+				{ redirect: "manual" },
+			);
+
+			assert.equal(response.status, 302);
+			const location = response.headers.get("location");
+			assert.ok(location);
+			const redirectUrl = new URL(location);
+			assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
+		});
+	});
+
+	test("GET /api/orders/momo/return redirects with error when resultCode is missing", async () => {
+		await withServer(async (port) => {
+			const response = await fetch(
+				`http://127.0.0.1:${port}/api/orders/momo/return?orderId=fake-order`,
+				{ redirect: "manual" },
+			);
+
+			assert.equal(response.status, 302);
+			const location = response.headers.get("location");
+			assert.ok(location);
+			const redirectUrl = new URL(location);
+			assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
+		});
+	});
+
+	test("GET /api/orders/momo/return does not update order when signature is invalid", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PENDING",
+				momoRequestId: "momo-req-return-badsig",
+			});
+
+			try {
+				const queryString = new URLSearchParams({
+					orderId: testOrder.id,
+					resultCode: "0",
+					requestId: "momo-req-return-badsig",
+					transId: "80000003",
+					signature: "invalid-signature-value",
+				}).toString();
+
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+					{ redirect: "manual" },
+				);
+
+				assert.equal(response.status, 302);
+
+				const order = db.orders.find((item) => item.id === testOrder.id);
+				assert.equal(order?.paymentStatus, "PENDING");
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
+
+	test("GET /api/orders/momo/return skips update when order is already PAID by IPN", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PAID",
+				momoRequestId: "momo-req-return-already-paid",
+				momoTransactionId: "70000099",
+			});
+
+			try {
+				const returnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-return-already-paid",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "80000004",
+					resultCode: "0",
+					message: "Thành công",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				returnPayload.signature = createMomoCallbackSignature(
+					returnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const queryString = new URLSearchParams(returnPayload).toString();
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+					{ redirect: "manual" },
+				);
+
+				assert.equal(response.status, 302);
+
+				const order = db.orders.find((item) => item.id === testOrder.id);
+				assert.equal(order?.paymentStatus, "PAID");
+				assert.equal(order?.momoTransactionId, "70000099");
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
 });
 
 test("PATCH /api/orders/:id/cancel restores stock for fallback-created orders", async () => {
