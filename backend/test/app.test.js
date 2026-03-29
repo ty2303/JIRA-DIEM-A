@@ -754,6 +754,16 @@ describe("Cart", () => {
 // =============================================================================
 
 describe("Order pricing", () => {
+	afterEach(() => {
+		global.fetch = originalFetch;
+		delete process.env.MOMO_API_URL;
+		delete process.env.MOMO_PARTNER_CODE;
+		delete process.env.MOMO_ACCESS_KEY;
+		delete process.env.MOMO_SECRET_KEY;
+		delete process.env.MOMO_REDIRECT_URL;
+		delete process.env.MOMO_IPN_URL;
+	});
+
 	test("POST /api/orders calculates shipping fee and discount on the backend", async () => {
 		await withServer(async (port) => {
 			const response = await fetch(`http://127.0.0.1:${port}/api/orders`, {
@@ -861,6 +871,113 @@ describe("Order pricing", () => {
 				body: JSON.stringify({ email: "a@b.com" }),
 			});
 			assert.equal(res.status, 401);
+		});
+	});
+
+	test("POST /api/orders/momo/init returns 503 when MoMo config is missing", async () => {
+		await withServer(async (port) => {
+			const response = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const body = await response.json();
+
+			assert.equal(response.status, 503);
+			assert.match(body.message, /MoMo chưa được cấu hình đầy đủ/);
+		});
+	});
+
+	test("POST /api/orders/momo/init creates a pending order and returns MoMo payment data", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const calls = mockFetchSequence([
+				{
+					status: 200,
+					body: {
+						resultCode: 0,
+						message: "Success",
+						requestId: "momo-request-test",
+						payUrl: "https://momo.test/pay",
+						deeplink: "momo://pay/test",
+						qrCodeUrl: "https://momo.test/qr",
+					},
+				},
+			]);
+
+			const response = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					discount: 10000,
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const body = await response.json();
+
+			assert.equal(response.status, 201);
+			assert.equal(body.data.order.paymentMethod, "MOMO");
+			assert.equal(body.data.order.paymentStatus, "PENDING");
+			assert.equal(body.data.order.momoRequestId, "momo-request-test");
+			assert.equal(body.data.payment.payUrl, "https://momo.test/pay");
+
+			const [{ 1: momoRequest }] = calls;
+			const requestBody = JSON.parse(momoRequest.body);
+			assert.equal(requestBody.partnerCode, "MOMO_PARTNER");
+			assert.equal(requestBody.requestType, "captureWallet");
+			assert.equal(requestBody.amount, "120000");
+			assert.equal(requestBody.orderId, body.data.order.id);
+			assert.ok(requestBody.signature);
+
+			removeTestOrder(body.data.order.id);
 		});
 	});
 });
