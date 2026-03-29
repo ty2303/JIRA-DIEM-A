@@ -78,6 +78,12 @@ function removeMemoryOrder(orderId) {
 }
 
 function buildMomoRedirectUrl(orderId) {
+  const backendUrl = process.env.BACKEND_URL?.trim() ?? "";
+  if (backendUrl) {
+    const url = new URL(`${backendUrl}/api/orders/momo/return`);
+    url.searchParams.set("orderId", orderId);
+    return url.toString();
+  }
   const config = getMomoConfig();
   const redirectUrl = new URL(config.redirectUrl);
   redirectUrl.searchParams.set("orderId", orderId);
@@ -452,6 +458,114 @@ ordersRouter.post("/momo/init", requireAuth, async (req, res) => {
         .json(fail(fallbackError.message ?? "Khởi tạo thanh toán MoMo thất bại", fallbackError.status ?? 500));
     }
   }
+});
+
+/**
+ * GET /momo/return — MoMo redirect callback (user quay lại từ MoMo).
+ * KHÔNG phải nguồn xác nhận duy nhất — IPN mới là authoritative.
+ * Return chỉ cập nhật optimistic để frontend hiển thị sớm hơn.
+ */
+ordersRouter.get("/momo/return", async (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL?.split(",")[0]?.trim() ?? "";
+
+  const {
+    orderId: rawOrderId,
+    resultCode: rawResultCode,
+    message: momoMessage,
+    requestId,
+    transId: rawTransId,
+  } = req.query;
+
+  const orderId = String(rawOrderId ?? "").trim();
+  const resultCode = parseMomoResultCode(rawResultCode);
+  const transId = rawTransId == null ? null : String(rawTransId);
+
+  console.log("[MoMo Return]", JSON.stringify({
+    timestamp: new Date().toISOString(),
+    orderId,
+    resultCode,
+    rawResultCode,
+    message: momoMessage,
+    requestId,
+    transId,
+    fullQuery: req.query,
+  }));
+
+  if (!orderId || resultCode == null) {
+    console.warn("[MoMo Return] Missing orderId or resultCode");
+
+    if (frontendUrl) {
+      const url = new URL(`${frontendUrl}/checkout/success`);
+      url.searchParams.set("error", "invalid_callback");
+      return res.redirect(url.toString());
+    }
+    return res.status(400).json(fail("Thiếu thông tin kết quả thanh toán MoMo", 400));
+  }
+
+  let signatureValid = false;
+  try {
+    signatureValid = verifyMomoCallbackSignature(req.query);
+  } catch (configError) {
+    console.warn("[MoMo Return] Signature verification skipped:", configError.message);
+  }
+
+  if (!signatureValid) {
+    console.warn("[MoMo Return] Invalid signature — still redirecting, IPN is authoritative");
+  }
+
+  let order = null;
+  try {
+    order = await Order.findById(orderId).lean();
+  } catch {
+    /* MongoDB unavailable — fallback below */
+  }
+
+  if (!order) {
+    order = db.orders.find((item) => item.id === orderId) ?? null;
+  }
+
+  if (!order) {
+    console.warn("[MoMo Return] Order not found:", orderId);
+
+    if (frontendUrl) {
+      const url = new URL(`${frontendUrl}/checkout/success`);
+      url.searchParams.set("orderId", orderId);
+      url.searchParams.set("resultCode", String(resultCode));
+      url.searchParams.set("error", "order_not_found");
+      return res.redirect(url.toString());
+    }
+    return res.status(404).json(fail("Không tìm thấy đơn hàng", 404));
+  }
+
+  // Optimistic update only when signature is valid AND IPN hasn't already settled the order
+  if (signatureValid && order.paymentStatus !== "PAID" && order.paymentStatus !== "FAILED") {
+    try {
+      await applyMomoPaymentResult(orderId, resultCode, transId);
+      console.log("[MoMo Return] Optimistic update applied:", { orderId, resultCode });
+    } catch (updateError) {
+      console.error("[MoMo Return] Optimistic update failed:", updateError.message);
+    }
+  }
+
+  if (frontendUrl) {
+    const url = new URL(`${frontendUrl}/checkout/success`);
+    url.searchParams.set("orderId", orderId);
+    url.searchParams.set("resultCode", String(resultCode));
+    url.searchParams.set("paymentMethod", "MOMO");
+    if (momoMessage) url.searchParams.set("message", String(momoMessage));
+    if (transId) url.searchParams.set("transId", transId);
+    return res.redirect(url.toString());
+  }
+
+  return res.json(ok({
+    orderId,
+    resultCode,
+    message: momoMessage ?? null,
+    transId,
+    paymentMethod: "MOMO",
+    paymentStatus: resultCode === 0 ? "PAID" : resultCode === 1000 ? "PENDING" : "FAILED",
+    redirectUrl: null,
+  }, resultCode === 0 ? "Thanh toán thành công" : "Kết quả thanh toán MoMo"));
 });
 
 ordersRouter.post("/momo/ipn", express.json(), async (req, res) => {
