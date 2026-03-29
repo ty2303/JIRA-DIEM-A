@@ -6,7 +6,7 @@ export function serializeCategory(category, productCount = 0) {
     description: category.description ?? "",
     icon: category.icon ?? "Smartphone",
     productCount,
-    createdAt: toIso(category.createdAt)
+    createdAt: toIso(category.createdAt),
   };
 }
 
@@ -25,7 +25,7 @@ export function serializeProduct(product, categoryName = "") {
     specs: product.specs || undefined,
     stock: product.stock ?? 0,
     createdAt: toIso(product.createdAt),
-    updatedAt: toIso(product.updatedAt)
+    updatedAt: toIso(product.updatedAt),
   };
 }
 
@@ -73,6 +73,7 @@ export function serializeReview(review) {
     rating: review.rating,
     comment: review.comment,
     images: review.images ?? [],
+    analysisResult: review.analysisResult ?? null,
     createdAt: toIso(review.createdAt),
     updatedAt: toIso(review.updatedAt),
   };
@@ -80,7 +81,9 @@ export function serializeReview(review) {
 
 function toIso(value) {
   if (!value) return undefined;
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(value).toISOString();
 }
 
 function normalizeBadge(value) {
@@ -97,7 +100,7 @@ function normalizeBadge(value) {
     sale: "Giảm giá",
     trending: "Xu hướng",
     "best seller": "Bán chạy",
-    value: "Giá tốt"
+    value: "Giá tốt",
   };
 
   return badgeMap[normalized] ?? value;
