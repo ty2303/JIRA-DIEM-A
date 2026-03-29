@@ -31,7 +31,7 @@ export function serializeProduct(product, categoryName = "") {
 
 export function serializeOrder(order) {
   return {
-    id: order._id,
+    id: order._id ?? order.id,
     userId: order.userId,
     email: order.email,
     customerName: order.customerName,
@@ -56,6 +56,8 @@ export function serializeOrder(order) {
     discount: order.discount ?? 0,
     total: order.total,
     paymentStatus: order.paymentStatus,
+    momoRequestId: order.momoRequestId ?? null,
+    momoTransactionId: order.momoTransactionId ?? null,
     cancelReason: order.cancelReason,
     cancelledBy: order.cancelledBy,
     createdAt: toIso(order.createdAt),

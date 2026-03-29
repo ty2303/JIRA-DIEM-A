@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import express from "express";
 import { createOrder, db, paginate, restoreReservedStockForOrder } from "../data/store.js";
 import { fail, ok } from "../lib/apiResponse.js";
 import { calculateOrderPricing } from "../lib/orderPricing.js";
 import { serializeOrder } from "../lib/catalogSerializers.js";
+import { MomoConfigError, MomoGatewayError, createMomoPayment } from "../lib/momo.js";
 import { sendToUser } from "../lib/realtime.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { Order } from "../models/Order.js";
@@ -19,6 +21,54 @@ const VALID_TRANSITIONS = {
   CANCELLED: [],
 };
 const CANCELLABLE_STATUSES = ["PENDING", "CONFIRMED"];
+
+function validateOrderPayload(payload, paymentMethod) {
+  const { email, customerName, phone, address, city, district, ward, items } = payload;
+
+  if (!email || !customerName || !phone || !address || !city || !district || !ward || !paymentMethod) {
+    return "Vui lòng điền đầy đủ thông tin";
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return "Giỏ hàng trống";
+  }
+
+  for (const item of items) {
+    if (!item.productId || !item.productName || item.price == null || !item.quantity || item.quantity < 1) {
+      return "Thông tin sản phẩm không hợp lệ";
+    }
+  }
+
+  return null;
+}
+
+async function ensureProductsAvailable(items) {
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    if (!product) {
+      throw { status: 404, message: `Sản phẩm "${item.productName}" không tồn tại` };
+    }
+    if (product.stock < item.quantity) {
+      throw {
+        status: 409,
+        message: `Sản phẩm "${product.name}" không đủ hàng (còn ${product.stock})`,
+      };
+    }
+  }
+}
+
+async function updateMongoStock(items, delta) {
+  for (const item of items) {
+    await Product.findByIdAndUpdate(item.productId, {
+      $inc: { stock: delta * item.quantity },
+      updatedAt: new Date(),
+    });
+  }
+}
+
+function removeMemoryOrder(orderId) {
+  db.orders = db.orders.filter((item) => item.id !== orderId);
+}
 
 /** GET / - Danh sách tất cả đơn hàng (admin) */
 ordersRouter.get("/", requireAdmin, async (req, res) => {
@@ -175,6 +225,138 @@ ordersRouter.post("/", requireAuth, async (req, res) => {
         .json(fail(fallbackError.message ?? "Đặt hàng thất bại", fallbackError.status ?? 500));
     }
   }
+});
+
+ordersRouter.post("/momo/init", requireAuth, async (req, res) => {
+  const paymentMethod = req.body.paymentMethod ?? "MOMO";
+  if (paymentMethod !== "MOMO") {
+    return res.status(400).json(fail("API này chỉ hỗ trợ phương thức thanh toán MOMO", 400));
+  }
+
+  const validationError = validateOrderPayload(req.body, paymentMethod);
+  if (validationError) {
+    return res.status(400).json(fail(validationError, 400));
+  }
+
+  const {
+    email,
+    customerName,
+    phone,
+    address,
+    city,
+    district,
+    ward,
+    items,
+    note,
+    discount,
+  } = req.body;
+
+  const pricing = calculateOrderPricing(items, { discount });
+
+  try {
+    await ensureProductsAvailable(items);
+
+    const orderId = crypto.randomUUID();
+    const createdOrder = await Order.create({
+      _id: orderId,
+      userId: req.user.id,
+      email,
+      customerName,
+      phone,
+      address,
+      city,
+      district,
+      ward,
+      note: note ?? "",
+      paymentMethod,
+      items,
+      ...pricing,
+      paymentStatus: "PENDING",
+      momoRequestId: null,
+      momoTransactionId: null,
+    });
+
+    await updateMongoStock(items, -1);
+
+    try {
+      const payment = await createMomoPayment({
+        amount: pricing.total,
+        orderId,
+        orderInfo: `Thanh toan don hang ${orderId}`,
+      });
+
+      const updatedOrder = await Order.findByIdAndUpdate(
+        orderId,
+        { momoRequestId: payment.requestId },
+        { new: true, lean: true },
+      );
+
+      return res.status(201).json(
+        ok(
+          {
+            order: serializeOrder(updatedOrder ?? createdOrder.toObject()),
+            payment,
+          },
+          "Khởi tạo thanh toán MoMo thành công",
+          201,
+        ),
+      );
+    } catch (error) {
+      await updateMongoStock(items, 1);
+      await Order.findByIdAndDelete(orderId);
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof MomoConfigError || error instanceof MomoGatewayError) {
+      return res.status(error.status).json(fail(error.message, error.status));
+    }
+
+    if (error?.status && error?.message) {
+      return res.status(error.status).json(fail(error.message, error.status));
+    }
+
+    try {
+      const order = createOrder({ ...req.body, paymentMethod }, req.user);
+
+      try {
+        const payment = await createMomoPayment({
+          amount: order.total,
+          orderId: order.id,
+          orderInfo: `Thanh toan don hang ${order.id}`,
+        });
+
+        order.paymentStatus = "PENDING";
+        order.momoRequestId = payment.requestId;
+
+        return res.status(201).json(
+          ok(
+            {
+              order,
+              payment,
+            },
+            "Khởi tạo thanh toán MoMo thành công",
+            201,
+          ),
+        );
+      } catch (paymentError) {
+        restoreReservedStockForOrder(order);
+        removeMemoryOrder(order.id);
+        throw paymentError;
+      }
+    } catch (fallbackError) {
+      if (fallbackError instanceof MomoConfigError || fallbackError instanceof MomoGatewayError) {
+        return res.status(fallbackError.status).json(fail(fallbackError.message, fallbackError.status));
+      }
+
+      return res
+        .status(fallbackError.status ?? 500)
+        .json(fail(fallbackError.message ?? "Khởi tạo thanh toán MoMo thất bại", fallbackError.status ?? 500));
+    }
+  }
+});
+
+ordersRouter.post("/momo/ipn", express.json(), (_req, res) => {
+  res.status(204).end();
 });
 
 /** PATCH /:id/status - Cập nhật trạng thái đơn hàng (admin) */
