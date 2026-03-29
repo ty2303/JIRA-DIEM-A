@@ -783,6 +783,7 @@ describe("Order pricing", () => {
 		delete process.env.MOMO_SECRET_KEY;
 		delete process.env.MOMO_REDIRECT_URL;
 		delete process.env.MOMO_IPN_URL;
+		delete process.env.FRONTEND_URL;
 	});
 
 	test("POST /api/orders calculates shipping fee and discount on the backend", async () => {
@@ -1279,6 +1280,7 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return redirects to frontend with correct query params on success", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
 			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
 			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
 			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
@@ -1338,6 +1340,7 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return redirects with failure resultCode when payment fails", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
 			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
 			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
 			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
@@ -1392,6 +1395,8 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return redirects with error when orderId is missing", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
+
 			const response = await fetch(
 				`http://127.0.0.1:${port}/api/orders/momo/return?resultCode=0`,
 				{ redirect: "manual" },
@@ -1407,6 +1412,8 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return redirects with error when resultCode is missing", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
+
 			const response = await fetch(
 				`http://127.0.0.1:${port}/api/orders/momo/return?orderId=fake-order`,
 				{ redirect: "manual" },
@@ -1422,6 +1429,7 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return does not update order when signature is invalid", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
 			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
 			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
 			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
@@ -1461,6 +1469,7 @@ describe("Order pricing", () => {
 
 	test("GET /api/orders/momo/return skips update when order is already PAID by IPN", async () => {
 		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
 			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
 			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
 			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
