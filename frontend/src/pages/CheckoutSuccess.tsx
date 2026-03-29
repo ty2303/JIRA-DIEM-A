@@ -68,7 +68,8 @@ function getCheckoutPageState(
 ): CheckoutPageState {
   if (paymentMethod === 'MOMO') {
     if (paymentStatus === 'PAID') return 'success';
-    if (paymentStatus === 'FAILED' || paymentStatus === 'REFUNDED') return 'failure';
+    if (paymentStatus === 'FAILED' || paymentStatus === 'REFUNDED')
+      return 'failure';
     if (resultCode != null && resultCode !== 0) return 'failure';
     return 'pending';
   }
@@ -89,7 +90,11 @@ function CheckoutSuccess() {
   const pendingCheckout = getPendingMomoCheckout();
 
   const state = location.state as CheckoutSuccessState;
-  const orderId = state?.orderId ?? searchParams.get('orderId') ?? pendingCheckout?.orderId ?? '';
+  const orderId =
+    state?.orderId ??
+    searchParams.get('orderId') ??
+    pendingCheckout?.orderId ??
+    '';
   const fromCheckout = Boolean(state?.fromCheckout || orderId);
   const resultCode = parseResultCode(searchParams.get('resultCode'));
   const order = currentOrder?.id === orderId ? currentOrder : null;
@@ -133,7 +138,8 @@ function CheckoutSuccess() {
 
       if (
         !cartClearedRef.current &&
-        (!pendingCheckout || pendingCheckout.cartSignature === currentCartSignature)
+        (!pendingCheckout ||
+          pendingCheckout.cartSignature === currentCartSignature)
       ) {
         cartClearedRef.current = true;
         void clearCart();
@@ -305,7 +311,9 @@ function CheckoutSuccess() {
               className="btn-outline flex items-center justify-center gap-2 no-underline"
             >
               <ShoppingBag className="h-4 w-4" />
-              {pageState === 'failure' ? 'Quay lại giỏ hàng' : 'Tiếp tục mua sắm'}
+              {pageState === 'failure'
+                ? 'Quay lại giỏ hàng'
+                : 'Tiếp tục mua sắm'}
             </Link>
           </div>
         </div>

@@ -162,7 +162,9 @@ function Checkout() {
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
-  const [pendingOrderId] = useState(() => getPendingMomoCheckout()?.orderId ?? '');
+  const [pendingOrderId] = useState(
+    () => getPendingMomoCheckout()?.orderId ?? '',
+  );
 
   if (items.length === 0 && pendingOrderId) {
     return (
@@ -256,17 +258,25 @@ function Checkout() {
         const paymentUrl = payment.paymentUrl ?? payment.payUrl;
 
         if (!paymentUrl || !isValidPaymentUrl(paymentUrl)) {
-          setError('Không nhận được liên kết thanh toán MoMo hợp lệ. Vui lòng thử lại.');
+          setError(
+            'Không nhận được liên kết thanh toán MoMo hợp lệ. Vui lòng thử lại.',
+          );
           return;
         }
 
         addOrder(order);
-        setPendingMomoCheckout(order.id, buildCheckoutCartSignature(payload.items));
+        setPendingMomoCheckout(
+          order.id,
+          buildCheckoutCartSignature(payload.items),
+        );
         window.location.assign(paymentUrl);
         return;
       }
 
-      const res = await apiClient.post<ApiResponse<Order>>(ENDPOINTS.ORDERS.BASE, payload);
+      const res = await apiClient.post<ApiResponse<Order>>(
+        ENDPOINTS.ORDERS.BASE,
+        payload,
+      );
       const order = res.data.data;
       addOrder(order);
       clearPendingMomoCheckout();

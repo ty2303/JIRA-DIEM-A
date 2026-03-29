@@ -19,7 +19,10 @@ export function buildCheckoutCartSignature(
 }
 
 function hasSessionStorage() {
-  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.sessionStorage !== 'undefined'
+  );
 }
 
 export function getPendingMomoCheckout(): PendingMomoCheckout | null {
