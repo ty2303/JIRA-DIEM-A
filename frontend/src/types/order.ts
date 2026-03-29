@@ -69,6 +69,27 @@ export interface CreateOrderPayload {
   discount?: number;
 }
 
+export interface MomoPayment {
+  partnerCode: string;
+  requestId: string;
+  orderId: string;
+  amount: string;
+  resultCode: number;
+  message: string;
+  payUrl: string | null;
+  paymentUrl: string | null;
+  deeplink?: string | null;
+  qrCodeUrl?: string | null;
+  deeplinkMiniApp?: string | null;
+  responseTime?: string | number | null;
+  signature?: string | null;
+}
+
+export interface CreateMomoOrderResponse {
+  order: Order;
+  payment: MomoPayment;
+}
+
 export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   PENDING: 'Chờ xác nhận',
   CONFIRMED: 'Đã xác nhận',

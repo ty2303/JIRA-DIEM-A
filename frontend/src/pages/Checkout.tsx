@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   CreditCard,
@@ -14,6 +15,12 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import {
+  buildCheckoutCartSignature,
+  clearPendingMomoCheckout,
+  getPendingMomoCheckout,
+  setPendingMomoCheckout,
+} from '@/lib/pendingMomoCheckout';
+import {
   calculateOrderPricing,
   FREE_SHIPPING_THRESHOLD,
 } from '@/lib/orderPricing';
@@ -21,7 +28,12 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useOrderStore } from '@/store/useOrderStore';
 import type { ApiResponse } from '@/api/types';
-import type { CreateOrderPayload, Order, PaymentMethod } from '@/types/order';
+import type {
+  CreateMomoOrderResponse,
+  CreateOrderPayload,
+  Order,
+  PaymentMethod,
+} from '@/types/order';
 
 export const Component = Checkout;
 
@@ -43,6 +55,15 @@ type FieldKey =
   | 'ward';
 
 type FieldErrors = Partial<Record<FieldKey, string>>;
+
+function isValidPaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function validate(fd: FormData): FieldErrors {
   const get = (k: string) => ((fd.get(k) as string) ?? '').trim();
@@ -141,6 +162,35 @@ function Checkout() {
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
+  const [pendingOrderId] = useState(
+    () => getPendingMomoCheckout()?.orderId ?? '',
+  );
+
+  if (items.length === 0 && pendingOrderId) {
+    return (
+      <section className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+        <h2 className="font-display text-2xl font-bold text-text-primary">
+          Giao dịch MoMo đang chờ xác nhận
+        </h2>
+        <p className="mt-2 max-w-xl text-text-secondary">
+          Bạn đã khởi tạo đơn hàng MoMo trước đó. Nếu vừa đóng tab hoặc quay lại
+          giữa chừng, hãy mở lại trang theo dõi đơn hàng để kiểm tra kết quả
+          thanh toán.
+        </p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <Link
+            to={`/checkout/success?orderId=${encodeURIComponent(pendingOrderId)}`}
+            className="btn-primary no-underline"
+          >
+            Xem trạng thái thanh toán
+          </Link>
+          <Link to="/products" className="btn-outline no-underline">
+            Tiếp tục mua sắm
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   if (items.length === 0) {
     return (
@@ -164,6 +214,7 @@ function Checkout() {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (loading) return;
     setError('');
 
     const fd = new FormData(e.currentTarget);
@@ -198,13 +249,38 @@ function Checkout() {
     };
 
     try {
+      if (paymentMethod === 'MOMO') {
+        const res = await apiClient.post<ApiResponse<CreateMomoOrderResponse>>(
+          ENDPOINTS.ORDERS.MOMO_INIT,
+          payload,
+        );
+        const { order, payment } = res.data.data;
+        const paymentUrl = payment.paymentUrl ?? payment.payUrl;
+
+        if (!paymentUrl || !isValidPaymentUrl(paymentUrl)) {
+          setError(
+            'Không nhận được liên kết thanh toán MoMo hợp lệ. Vui lòng thử lại.',
+          );
+          return;
+        }
+
+        addOrder(order);
+        setPendingMomoCheckout(
+          order.id,
+          buildCheckoutCartSignature(payload.items),
+        );
+        window.location.assign(paymentUrl);
+        return;
+      }
+
       const res = await apiClient.post<ApiResponse<Order>>(
         ENDPOINTS.ORDERS.BASE,
         payload,
       );
       const order = res.data.data;
       addOrder(order);
-      clear();
+      clearPendingMomoCheckout();
+      await clear();
       navigate(`/checkout/success?orderId=${encodeURIComponent(order.id)}`, {
         state: { fromCheckout: true, orderId: order.id },
       });
@@ -236,6 +312,28 @@ function Checkout() {
       </div>
 
       <StepBar current={1} />
+
+      {pendingOrderId && (
+        <div className="mb-8 flex items-start gap-3 rounded-2xl border border-[#ae2070]/20 bg-[#ae2070]/5 px-4 py-4 text-sm text-text-secondary">
+          <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-[#ae2070]" />
+          <div>
+            <p className="font-medium text-text-primary">
+              Bạn đang có một giao dịch MoMo chờ hoàn tất.
+            </p>
+            <p className="mt-1">
+              Nếu bạn vừa đóng tab hoặc quay lại giữa chừng, bạn có thể tiếp tục
+              kiểm tra đơn hàng{' '}
+              <Link
+                to={`/checkout/success?orderId=${encodeURIComponent(pendingOrderId)}`}
+                className="font-semibold text-[#ae2070] no-underline hover:underline"
+              >
+                tại đây
+              </Link>
+              .
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-12 lg:grid-cols-12">
         {/* ── Left: Form ── */}

@@ -3,6 +3,15 @@ import crypto from "node:crypto";
 const DEFAULT_REQUEST_TYPE = "captureWallet";
 const DEFAULT_LANG = "vi";
 
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export class MomoConfigError extends Error {
   constructor(message) {
     super(message);
@@ -54,7 +63,7 @@ export function getMomoConfig() {
   return config;
 }
 
-function buildSignaturePayload(payload) {
+function buildCreateSignaturePayload(payload) {
   return [
     `accessKey=${payload.accessKey}`,
     `amount=${payload.amount}`,
@@ -69,6 +78,24 @@ function buildSignaturePayload(payload) {
   ].join("&");
 }
 
+function buildCallbackSignaturePayload(payload, accessKey) {
+  return [
+    `accessKey=${accessKey}`,
+    `amount=${payload.amount ?? ""}`,
+    `extraData=${payload.extraData ?? ""}`,
+    `message=${payload.message ?? ""}`,
+    `orderId=${payload.orderId ?? ""}`,
+    `orderInfo=${payload.orderInfo ?? ""}`,
+    `orderType=${payload.orderType ?? ""}`,
+    `partnerCode=${payload.partnerCode ?? ""}`,
+    `payType=${payload.payType ?? ""}`,
+    `requestId=${payload.requestId ?? ""}`,
+    `responseTime=${payload.responseTime ?? ""}`,
+    `resultCode=${payload.resultCode ?? ""}`,
+    `transId=${payload.transId ?? ""}`,
+  ].join("&");
+}
+
 async function parseJsonResponse(response) {
   try {
     return await response.json();
@@ -77,7 +104,7 @@ async function parseJsonResponse(response) {
   }
 }
 
-export async function createMomoPayment({ amount, extraData = "", orderId, orderInfo }) {
+export async function createMomoPayment({ amount, extraData = "", orderId, orderInfo, redirectUrl }) {
   const config = getMomoConfig();
   const requestId = `momo-${crypto.randomUUID()}`;
 
@@ -88,7 +115,7 @@ export async function createMomoPayment({ amount, extraData = "", orderId, order
     amount: String(amount),
     orderId,
     orderInfo,
-    redirectUrl: config.redirectUrl,
+    redirectUrl: redirectUrl?.trim() || config.redirectUrl,
     ipnUrl: config.ipnUrl,
     requestType: config.requestType,
     extraData,
@@ -97,7 +124,7 @@ export async function createMomoPayment({ amount, extraData = "", orderId, order
 
   requestBody.signature = crypto
     .createHmac("sha256", config.secretKey)
-    .update(buildSignaturePayload(requestBody))
+    .update(buildCreateSignaturePayload(requestBody))
     .digest("hex");
 
   const response = await fetch(config.apiUrl, {
@@ -118,6 +145,12 @@ export async function createMomoPayment({ amount, extraData = "", orderId, order
     throw new MomoGatewayError(payload?.message || "Khởi tạo thanh toán MoMo thất bại");
   }
 
+  const payUrl = payload.payUrl ?? null;
+
+  if (!payUrl || !isValidHttpUrl(payUrl)) {
+    throw new MomoGatewayError("MoMo không trả về đường dẫn thanh toán hợp lệ");
+  }
+
   return {
     partnerCode: payload.partnerCode ?? config.partnerCode,
     requestId: payload.requestId ?? requestId,
@@ -125,11 +158,35 @@ export async function createMomoPayment({ amount, extraData = "", orderId, order
     amount: payload.amount ?? requestBody.amount,
     resultCode: payload.resultCode,
     message: payload.message ?? "Success",
-    payUrl: payload.payUrl ?? null,
+    payUrl,
+    paymentUrl: payUrl,
     deeplink: payload.deeplink ?? null,
     qrCodeUrl: payload.qrCodeUrl ?? null,
     deeplinkMiniApp: payload.deeplinkMiniApp ?? null,
     responseTime: payload.responseTime ?? null,
     signature: payload.signature ?? null,
   };
+}
+
+export function verifyMomoCallbackSignature(payload) {
+  const config = getMomoConfig();
+  const signature = payload?.signature;
+
+  if (!signature || typeof signature !== "string") {
+    return false;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", config.secretKey)
+    .update(buildCallbackSignaturePayload(payload, config.accessKey))
+    .digest("hex");
+
+  if (signature.length !== expectedSignature.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expectedSignature),
+  );
 }
