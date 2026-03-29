@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import http from "node:http";
 import { afterEach, describe, test } from "node:test";
 import { WebSocket } from "ws";
@@ -105,6 +106,26 @@ function mockFetchSequence(responses) {
 	};
 
 	return calls;
+}
+
+function createMomoCallbackSignature(payload, accessKey, secretKey) {
+	const rawSignature = [
+		`accessKey=${accessKey}`,
+		`amount=${payload.amount}`,
+		`extraData=${payload.extraData}`,
+		`message=${payload.message}`,
+		`orderId=${payload.orderId}`,
+		`orderInfo=${payload.orderInfo}`,
+		`orderType=${payload.orderType}`,
+		`partnerCode=${payload.partnerCode}`,
+		`payType=${payload.payType}`,
+		`requestId=${payload.requestId}`,
+		`responseTime=${payload.responseTime}`,
+		`resultCode=${payload.resultCode}`,
+		`transId=${payload.transId}`,
+	].join("&");
+
+	return crypto.createHmac("sha256", secretKey).update(rawSignature).digest("hex");
 }
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
@@ -874,6 +895,42 @@ describe("Order pricing", () => {
 		});
 	});
 
+	test("POST /api/orders rejects MOMO orders and requires the dedicated init endpoint", async () => {
+		await withServer(async (port) => {
+			const response = await fetch(`http://127.0.0.1:${port}/api/orders`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const body = await response.json();
+
+			assert.equal(response.status, 400);
+			assert.match(body.message, /khởi tạo qua luồng thanh toán tương ứng/i);
+		});
+	});
+
 	test("POST /api/orders/momo/init returns 503 when MoMo config is missing", async () => {
 		await withServer(async (port) => {
 			const response = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
@@ -968,6 +1025,7 @@ describe("Order pricing", () => {
 			assert.equal(body.data.order.paymentStatus, "PENDING");
 			assert.equal(body.data.order.momoRequestId, "momo-request-test");
 			assert.equal(body.data.payment.payUrl, "https://momo.test/pay");
+			assert.equal(body.data.payment.paymentUrl, "https://momo.test/pay");
 
 			const [{ 1: momoRequest }] = calls;
 			const requestBody = JSON.parse(momoRequest.body);
@@ -978,6 +1036,244 @@ describe("Order pricing", () => {
 			assert.ok(requestBody.signature);
 
 			removeTestOrder(body.data.order.id);
+		});
+	});
+
+	test("POST /api/orders/momo/init rejects invalid payment URLs and rolls the order back", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const orderCountBefore = db.orders.length;
+			mockFetchSequence([
+				{
+					status: 200,
+					body: {
+						resultCode: 0,
+						message: "Success",
+						requestId: "momo-request-invalid-url",
+						payUrl: "javascript:alert('xss')",
+					},
+				},
+			]);
+
+			const response = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const body = await response.json();
+
+			assert.equal(response.status, 502);
+			assert.match(body.message, /đường dẫn thanh toán hợp lệ/i);
+			assert.equal(db.orders.length, orderCountBefore);
+		});
+	});
+
+	test("POST /api/orders/momo/ipn marks successful payments as paid", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			mockFetchSequence([
+				{
+					status: 200,
+					body: {
+						resultCode: 0,
+						message: "Success",
+						requestId: "momo-request-paid",
+						payUrl: "https://momo.test/pay",
+					},
+				},
+			]);
+
+			const createResponse = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const createBody = await createResponse.json();
+			const orderId = createBody.data.order.id;
+
+			const ipnPayload = {
+				partnerCode: "MOMO_PARTNER",
+				orderId,
+				requestId: createBody.data.payment.requestId,
+				amount: "130000",
+				orderInfo: `Thanh toan don hang ${orderId}`,
+				orderType: "momo_wallet",
+				transId: "70000001",
+				resultCode: 0,
+				message: "Success",
+				payType: "qr",
+				responseTime: String(Date.now()),
+				extraData: "",
+			};
+			ipnPayload.signature = createMomoCallbackSignature(
+				ipnPayload,
+				process.env.MOMO_ACCESS_KEY,
+				process.env.MOMO_SECRET_KEY,
+			);
+
+			const ipnResponse = await fetch(`http://127.0.0.1:${port}/api/orders/momo/ipn`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(ipnPayload),
+			});
+
+			assert.equal(ipnResponse.status, 204);
+
+			const order = db.orders.find((item) => item.id === orderId);
+			assert.equal(order?.paymentStatus, "PAID");
+			assert.equal(order?.momoTransactionId, "70000001");
+
+			removeTestOrder(orderId);
+		});
+	});
+
+	test("POST /api/orders/momo/ipn marks failed payments as cancelled and restores stock", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const product = db.products.find((item) => item.id === "prod-iphone-15");
+			assert.ok(product);
+			const initialStock = product.stock;
+
+			mockFetchSequence([
+				{
+					status: 200,
+					body: {
+						resultCode: 0,
+						message: "Success",
+						requestId: "momo-request-failed",
+						payUrl: "https://momo.test/pay",
+					},
+				},
+			]);
+
+			const createResponse = await fetch(`http://127.0.0.1:${port}/api/orders/momo/init`, {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer demo-token",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					email: "demo@example.com",
+					customerName: "Demo User",
+					phone: "0900000001",
+					address: "123 Duong Nguyen Hue",
+					city: "TP.HCM",
+					district: "Quan 1",
+					ward: "Ben Nghe",
+					paymentMethod: "MOMO",
+					items: [
+						{
+							productId: "prod-iphone-15",
+							productName: "iPhone 15 Pro",
+							productImage: "",
+							brand: "Apple",
+							price: 100000,
+							quantity: 1,
+						},
+					],
+				}),
+			});
+			const createBody = await createResponse.json();
+			const orderId = createBody.data.order.id;
+
+			assert.equal(product.stock, initialStock - 1);
+
+			const ipnPayload = {
+				partnerCode: "MOMO_PARTNER",
+				orderId,
+				requestId: createBody.data.payment.requestId,
+				amount: "130000",
+				orderInfo: `Thanh toan don hang ${orderId}`,
+				orderType: "momo_wallet",
+				transId: "70000002",
+				resultCode: 1006,
+				message: "Transaction rejected",
+				payType: "qr",
+				responseTime: String(Date.now()),
+				extraData: "",
+			};
+			ipnPayload.signature = createMomoCallbackSignature(
+				ipnPayload,
+				process.env.MOMO_ACCESS_KEY,
+				process.env.MOMO_SECRET_KEY,
+			);
+
+			const ipnResponse = await fetch(`http://127.0.0.1:${port}/api/orders/momo/ipn`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(ipnPayload),
+			});
+
+			assert.equal(ipnResponse.status, 204);
+
+			const order = db.orders.find((item) => item.id === orderId);
+			assert.equal(order?.status, "CANCELLED");
+			assert.equal(order?.paymentStatus, "FAILED");
+			assert.equal(product.stock, initialStock);
+
+			removeTestOrder(orderId);
 		});
 	});
 });

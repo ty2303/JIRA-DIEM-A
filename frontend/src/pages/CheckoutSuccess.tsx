@@ -1,6 +1,8 @@
-﻿import {
+import {
+  AlertCircle,
   Check,
   ClipboardList,
+  Clock3,
   CreditCard,
   Loader2,
   MapPin,
@@ -8,9 +10,15 @@
   ShoppingBag,
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router';
 
+import {
+  buildCheckoutCartSignature,
+  clearPendingMomoCheckout,
+  getPendingMomoCheckout,
+} from '@/lib/pendingMomoCheckout';
+import { useCartStore } from '@/store/useCartStore';
 import { useOrderStore } from '@/store/useOrderStore';
 import { ORDER_STATUS_LABEL } from '@/types/order';
 
@@ -20,6 +28,8 @@ type CheckoutSuccessState = {
   fromCheckout?: boolean;
   orderId?: string;
 } | null;
+
+type CheckoutPageState = 'success' | 'pending' | 'failure';
 
 function formatCurrency(value: number) {
   return `${value.toLocaleString('vi-VN')}₫`;
@@ -45,17 +55,50 @@ function getPaymentStatusLabel(paymentStatus?: string, paymentMethod?: string) {
   }
 }
 
+function parseResultCode(value: string | null) {
+  if (value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getCheckoutPageState(
+  paymentMethod?: string,
+  paymentStatus?: string,
+  resultCode?: number | null,
+): CheckoutPageState {
+  if (paymentMethod === 'MOMO') {
+    if (paymentStatus === 'PAID') return 'success';
+    if (paymentStatus === 'FAILED' || paymentStatus === 'REFUNDED') return 'failure';
+    if (resultCode != null && resultCode !== 0) return 'failure';
+    return 'pending';
+  }
+
+  return 'success';
+}
+
 function CheckoutSuccess() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const cartItems = useCartStore((store) => store.items);
+  const clearCart = useCartStore((store) => store.clear);
   const fetchOrderById = useOrderStore((store) => store.fetchOrderById);
   const currentOrder = useOrderStore((store) => store.currentOrder);
   const isLoading = useOrderStore((store) => store.isLoading);
   const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
+  const cartClearedRef = useRef(false);
+  const pendingCheckout = getPendingMomoCheckout();
 
   const state = location.state as CheckoutSuccessState;
-  const orderId = state?.orderId ?? searchParams.get('orderId') ?? '';
-  const fromCheckout = Boolean(state?.fromCheckout);
+  const orderId = state?.orderId ?? searchParams.get('orderId') ?? pendingCheckout?.orderId ?? '';
+  const fromCheckout = Boolean(state?.fromCheckout || orderId);
+  const resultCode = parseResultCode(searchParams.get('resultCode'));
+  const order = currentOrder?.id === orderId ? currentOrder : null;
+  const currentCartSignature = buildCheckoutCartSignature(
+    cartItems.map(({ product, quantity }) => ({
+      productId: product.id,
+      quantity,
+    })),
+  );
 
   useEffect(() => {
     if (!orderId) {
@@ -75,11 +118,48 @@ function CheckoutSuccess() {
     };
   }, [fetchOrderById, orderId]);
 
+  useEffect(() => {
+    if (!order) {
+      return;
+    }
+
+    if (order.paymentMethod !== 'MOMO') {
+      clearPendingMomoCheckout();
+      return;
+    }
+
+    if (order.paymentStatus === 'PAID') {
+      clearPendingMomoCheckout();
+
+      if (
+        !cartClearedRef.current &&
+        (!pendingCheckout || pendingCheckout.cartSignature === currentCartSignature)
+      ) {
+        cartClearedRef.current = true;
+        void clearCart();
+      }
+
+      return;
+    }
+
+    if (
+      order.paymentStatus === 'FAILED' ||
+      order.paymentStatus === 'REFUNDED' ||
+      order.status === 'CANCELLED'
+    ) {
+      clearPendingMomoCheckout();
+    }
+  }, [clearCart, currentCartSignature, order, pendingCheckout]);
+
   if (!fromCheckout && !orderId) {
     return <Navigate to="/products" replace />;
   }
 
-  const order = currentOrder?.id === orderId ? currentOrder : null;
+  const pageState = getCheckoutPageState(
+    order?.paymentMethod ?? pendingCheckout?.paymentMethod,
+    order?.paymentStatus,
+    resultCode,
+  );
   const shortOrderId = orderId ? orderId.slice(-8).toUpperCase() : 'N/A';
   const totalQuantity =
     order?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
@@ -89,6 +169,43 @@ function CheckoutSuccess() {
         .filter(Boolean)
         .join(', ')
     : '';
+
+  const heroIcon =
+    pageState === 'success' ? (
+      <Check className="h-10 w-10 text-green-600" strokeWidth={3} />
+    ) : pageState === 'failure' ? (
+      <AlertCircle className="h-10 w-10 text-red-500" strokeWidth={2.6} />
+    ) : (
+      <Clock3 className="h-10 w-10 text-amber-500" strokeWidth={2.6} />
+    );
+
+  const heroRingClass =
+    pageState === 'success'
+      ? 'bg-green-100 ring-green-50'
+      : pageState === 'failure'
+        ? 'bg-red-100 ring-red-50'
+        : 'bg-amber-100 ring-amber-50';
+
+  const heroTitle =
+    pageState === 'success'
+      ? 'Đặt hàng thành công!'
+      : pageState === 'failure'
+        ? 'Thanh toán chưa hoàn tất'
+        : 'Đang chờ xác nhận thanh toán';
+
+  const heroDescription =
+    pageState === 'success'
+      ? `Cảm ơn bạn đã mua sắm. Đơn hàng #${shortOrderId} đã được ghi nhận và đang chờ xử lý.`
+      : pageState === 'failure'
+        ? `Đơn hàng #${shortOrderId} chưa thanh toán thành công qua MoMo. Giỏ hàng vẫn được giữ lại để bạn có thể thử lại.`
+        : `Đơn hàng #${shortOrderId} đã được tạo và đang chờ MoMo hoặc hệ thống xác nhận kết quả thanh toán.`;
+
+  const helperMessage =
+    pageState === 'success'
+      ? 'Chúng tôi sẽ xác nhận đơn, chuẩn bị hàng và cập nhật trạng thái sớm nhất cho bạn.'
+      : pageState === 'failure'
+        ? 'Nếu bạn đóng tab hoặc quay lại giữa chừng, bạn vẫn có thể theo dõi trạng thái đơn hàng rồi thanh toán lại khi cần.'
+        : 'Nếu bạn vừa quay lại từ MoMo, hệ thống có thể cần thêm ít phút để đồng bộ. Chúng tôi chỉ làm trống giỏ hàng sau khi thanh toán được xác nhận.';
 
   return (
     <section className="mx-auto flex min-h-[70vh] max-w-5xl items-center px-6 py-20 lg:py-28">
@@ -109,26 +226,21 @@ function CheckoutSuccess() {
                 damping: 16,
                 delay: 0.1,
               }}
-              className="flex h-20 w-20 items-center justify-center rounded-full bg-green-100 ring-8 ring-green-50"
+              className={`flex h-20 w-20 items-center justify-center rounded-full ring-8 ${heroRingClass}`}
             >
-              <Check className="h-10 w-10 text-green-600" strokeWidth={3} />
+              {heroIcon}
             </motion.div>
           </div>
 
           <div className="text-center lg:text-left">
             <h1 className="font-display text-3xl font-bold text-text-primary lg:text-4xl">
-              Đặt hàng thành công!
+              {heroTitle}
             </h1>
             <p className="mt-4 text-base leading-7 text-text-secondary">
-              Cảm ơn bạn đã mua sắm. Đơn hàng{' '}
-              <span className="font-mono font-bold text-text-primary">
-                #{shortOrderId}
-              </span>{' '}
-              đã được ghi nhận và đang chờ xử lý.
+              {heroDescription}
             </p>
             <p className="mt-2 text-sm leading-6 text-text-muted">
-              Chúng tôi sẽ xác nhận đơn, chuẩn bị hàng và cập nhật trạng thái
-              sớm nhất cho bạn.
+              {helperMessage}
             </p>
           </div>
 
@@ -165,6 +277,20 @@ function CheckoutSuccess() {
             </div>
           )}
 
+          {pageState !== 'success' && (
+            <div
+              className={`mt-6 rounded-2xl px-4 py-3 text-sm ${
+                pageState === 'failure'
+                  ? 'border border-red-200 bg-red-50 text-red-600'
+                  : 'border border-amber-200 bg-amber-50 text-amber-700'
+              }`}
+            >
+              {pageState === 'failure'
+                ? 'MoMo chưa xác nhận thanh toán thành công. Bạn có thể quay lại giỏ hàng hoặc theo dõi đơn hàng để thử lại sau.'
+                : 'Thanh toán đang được xác nhận. Nếu bạn đóng tab trước đó, chỉ cần mở lại trang này hoặc vào mục đơn hàng để kiểm tra.'}
+            </div>
+          )}
+
           <div className="mt-10 flex flex-col gap-3 sm:flex-row">
             <Link
               to="/profile"
@@ -175,11 +301,11 @@ function CheckoutSuccess() {
               Xem đơn hàng
             </Link>
             <Link
-              to="/products"
+              to={pageState === 'failure' ? '/cart' : '/products'}
               className="btn-outline flex items-center justify-center gap-2 no-underline"
             >
               <ShoppingBag className="h-4 w-4" />
-              Tiếp tục mua sắm
+              {pageState === 'failure' ? 'Quay lại giỏ hàng' : 'Tiếp tục mua sắm'}
             </Link>
           </div>
         </div>
