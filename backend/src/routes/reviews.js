@@ -80,6 +80,7 @@ export async function createReview(req, res, options = {}) {
       rating: payload.rating,
       comment: payload.comment,
       images: payload.images,
+      analysisStatus: "none",
       analysisResult: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -152,10 +153,24 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
         .json(fail("Khong duoc thay doi san pham cua danh gia", 400));
     }
 
+    const oldRating = review.rating;
+    const oldComment = review.comment;
+    const oldImagesKey = (review.images ?? []).join(",");
+
     review.rating = payload.rating;
     review.comment = payload.comment;
     review.images = payload.images;
     review.updatedAt = new Date().toISOString();
+
+    const contentChanged =
+      oldRating !== payload.rating ||
+      oldComment !== payload.comment ||
+      oldImagesKey !== payload.images.join(",");
+    if (contentChanged) {
+      review.analysisStatus = "pending";
+      review.analysisResult = null;
+    }
+
     syncMemoryProductRating(payload.productId);
 
     return res.json(
@@ -179,10 +194,24 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
       .json(fail("Khong duoc thay doi san pham cua danh gia", 400));
   }
 
+  const oldRating = review.rating;
+  const oldComment = review.comment;
+  const oldImagesKey = (review.images ?? []).join(",");
+
   review.rating = payload.rating;
   review.comment = payload.comment;
   review.images = payload.images;
   review.updatedAt = new Date();
+
+  const contentChanged =
+    oldRating !== payload.rating ||
+    oldComment !== payload.comment ||
+    oldImagesKey !== payload.images.join(",");
+  if (contentChanged) {
+    review.analysisStatus = "pending";
+    review.analysisResult = null;
+  }
+
   await review.save();
   await syncProductRating(payload.productId);
 
@@ -205,7 +234,12 @@ reviewsRouter.delete("/:id", requireAuth, async (req, res) => {
 
     db.reviews.splice(index, 1);
     syncMemoryProductRating(review.productId);
-    return res.json(ok(null, "Xoa danh gia thanh cong"));
+    return res.json(
+      ok(
+        { id: review.id, productId: review.productId },
+        "Xoa danh gia thanh cong",
+      ),
+    );
   }
 
   const review = await Review.findById(req.params.id);
@@ -219,10 +253,13 @@ reviewsRouter.delete("/:id", requireAuth, async (req, res) => {
   }
 
   const productId = review.productId;
+  const reviewId = review._id;
   await review.deleteOne();
   await syncProductRating(productId);
 
-  res.json(ok(null, "Xoa danh gia thanh cong"));
+  res.json(
+    ok({ id: reviewId, productId }, "Xoa danh gia thanh cong"),
+  );
 });
 
 reviewsRouter.post("/upload-image", requireAuth, async (req, res) => {

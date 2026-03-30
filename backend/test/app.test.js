@@ -1758,8 +1758,259 @@ describe("Order pricing", () => {
 			} finally {
 				removeTestOrder(testOrder.id);
 			}
-		});
-	});
+    });
+  });
+
+  test("PUT /api/reviews/:id returns 403 for non-owner", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-iphone-15",
+          rating: 2,
+          comment: "Admin trying to edit user review",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 403);
+    });
+  });
+
+  test("PUT /api/reviews/:id returns 400 when productId differs", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Trying to change product",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 400);
+    });
+  });
+
+  test("PUT /api/reviews/:id resets analysisStatus on meaningful comment change", async () => {
+    const existingReview = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(existingReview);
+    const snapshot = structuredClone(existingReview);
+
+    existingReview.analysisStatus = "completed";
+    existingReview.analysisResult = {
+      sentiment: "positive",
+      sentimentScore: 0.9,
+      qualityScore: 0.8,
+      flags: [],
+      summary: "Good review",
+      analyzedAt: new Date().toISOString(),
+    };
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-iphone-15",
+          rating: 5,
+          comment: "Completely different comment now",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+    });
+
+    Object.assign(existingReview, snapshot);
+  });
+
+  test("PUT /api/reviews/:id preserves analysisResult when content unchanged", async () => {
+    const existingReview = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(existingReview);
+    const snapshot = structuredClone(existingReview);
+
+    const fakeAnalysis = {
+      sentiment: "positive",
+      sentimentScore: 0.95,
+      qualityScore: 0.88,
+      flags: [],
+      summary: "Nguoi dung hai long.",
+      analyzedAt: new Date().toISOString(),
+    };
+    existingReview.analysisStatus = "completed";
+    existingReview.analysisResult = fakeAnalysis;
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: existingReview.productId,
+          rating: existingReview.rating,
+          comment: existingReview.comment,
+          images: existingReview.images,
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "completed");
+      assert.equal(body.data.analysisResult.sentiment, "positive");
+    });
+
+    Object.assign(existingReview, snapshot);
+  });
+
+  test("PUT /api/reviews/:id returns 404 for unknown review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/nonexistent-id`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 5,
+            comment: "Does not exist",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("DELETE /api/reviews/:id allows admin to delete another user's review", async () => {
+    const review = {
+      id: "review-admin-del",
+      productId: "prod-iphone-15",
+      userId: "user-1",
+      username: "demo",
+      rating: 3,
+      comment: "Admin will delete this",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-admin-del`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.id, "review-admin-del");
+      assert.ok(!db.reviews.find((r) => r.id === "review-admin-del"));
+    });
+  });
+
+  test("DELETE /api/reviews/:id returns 403 for non-owner non-admin", async () => {
+    const review = {
+      id: "review-forbidden-del",
+      productId: "prod-iphone-15",
+      userId: "admin-1",
+      username: "admin",
+      rating: 5,
+      comment: "Only admin owns this",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-forbidden-del`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 403);
+    });
+  });
+
+  test("DELETE /api/reviews/:id returns 404 for unknown review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/nonexistent-id`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("DELETE /api/reviews/:id recalculates product rating", async () => {
+    const review = {
+      id: "review-rating-recalc",
+      productId: "prod-xiaomi-14",
+      userId: "user-1",
+      username: "demo",
+      rating: 1,
+      comment: "Bad product for rating test",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    const xiaomi = db.products.find((p) => p.id === "prod-xiaomi-14");
+    assert.ok(xiaomi);
+    const ratingBefore = xiaomi.rating;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-rating-recalc`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 200);
+      assert.notEqual(xiaomi.rating, ratingBefore);
+    });
+  });
 });
 
 test("PATCH /api/orders/:id/cancel restores stock for fallback-created orders", async () => {
@@ -1910,7 +2161,7 @@ describe("Reviews", () => {
     });
   });
 
-  test("POST /api/reviews creates a review without analysisResults", async () => {
+  test("POST /api/reviews creates a review with analysisStatus none", async () => {
     await withServer(async (port) => {
       const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
         method: "POST",
@@ -1931,8 +2182,8 @@ describe("Reviews", () => {
       assert.equal(body.data.productId, "prod-galaxy-s25");
       assert.equal(body.data.rating, 5);
       assert.ok(body.data.comment);
-      // No analysisResults field expected
-      assert.equal(body.data.analysisResults, undefined);
+      assert.equal(body.data.analysisStatus, "none");
+      assert.strictEqual(body.data.analysisResult, null);
     });
   });
 
@@ -2117,8 +2368,8 @@ describe("Reviews", () => {
       assert.equal(res.status, 200);
       assert.equal(body.data.rating, 3);
       assert.equal(body.data.comment, "Updated comment");
-      // No analysisResults expected
-      assert.equal(body.data.analysisResults, undefined);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
     });
 
     Object.assign(existingReview, snapshot);
@@ -2133,6 +2384,8 @@ describe("Reviews", () => {
       rating: 4,
       comment: "To be deleted",
       images: [],
+      analysisStatus: "none",
+      analysisResult: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -2146,7 +2399,11 @@ describe("Reviews", () => {
           headers: { Authorization: "Bearer demo-token" },
         },
       );
+      const body = await res.json();
+
       assert.equal(res.status, 200);
+      assert.equal(body.data.id, "review-del-test");
+      assert.equal(body.data.productId, "prod-iphone-15");
       assert.ok(!db.reviews.find((r) => r.id === "review-del-test"));
     });
   });
@@ -2162,6 +2419,7 @@ describe("Reviews - analysis model", () => {
       (r) => r.id === "review-1" || r.id === "review-2",
     );
     db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
       r.analysisResult = null;
     });
   });
@@ -2254,6 +2512,43 @@ describe("Reviews - analysis model", () => {
       assert.ok(found.analysisResult.flags.includes("spam"));
       assert.ok(found.analysisResult.flags.includes("low_quality"));
       assert.equal(found.analysisResult.sentiment, "neutral");
+    });
+  });
+
+  test("seed reviews have analysisStatus none by default", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const review = body.data.find((r) => r.id === "review-1");
+      assert.ok(review);
+      assert.equal(review.analysisStatus, "none");
+    });
+  });
+
+  test("POST /api/reviews new review has analysisStatus none", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 4,
+          comment: "Test analysisStatus on new review",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.analysisStatus, "none");
+      assert.strictEqual(body.data.analysisResult, null);
     });
   });
 });

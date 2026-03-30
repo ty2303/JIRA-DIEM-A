@@ -88,6 +88,11 @@ const reviewSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    analysisStatus: {
+      type: String,
+      enum: ["none", "pending", "completed"],
+      default: "none",
+    },
     analysisResult: {
       type: analysisResultSchema,
       default: null,

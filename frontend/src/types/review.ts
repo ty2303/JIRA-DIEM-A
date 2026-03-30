@@ -14,6 +14,8 @@ export interface ReviewAnalysisResult {
   analyzedAt: string;
 }
 
+export type ReviewAnalysisStatus = 'none' | 'pending' | 'completed';
+
 export interface Review {
   id: string;
   productId: string;
@@ -22,6 +24,8 @@ export interface Review {
   rating: number;
   comment: string;
   images?: string[];
+  /** Lifecycle state of AI analysis: none → pending → completed */
+  analysisStatus: ReviewAnalysisStatus;
   /** Null until AI analysis has been performed */
   analysisResult: ReviewAnalysisResult | null;
   createdAt: string;
@@ -36,3 +40,8 @@ export interface CreateReviewPayload {
 }
 
 export type UpdateReviewPayload = CreateReviewPayload;
+
+export interface DeleteReviewResponse {
+  id: string;
+  productId: string;
+}
