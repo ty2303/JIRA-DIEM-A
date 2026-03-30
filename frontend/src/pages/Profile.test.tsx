@@ -57,6 +57,7 @@ const order: Order = {
   discount: 0,
   total: 68000000,
   createdAt: '2026-03-10T10:00:00.000Z',
+  paymentStatus: 'UNPAID',
 };
 
 function createStorageMock(): StorageMock {

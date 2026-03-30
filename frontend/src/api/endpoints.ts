@@ -26,6 +26,7 @@ export const ENDPOINTS = {
   },
   ORDERS: {
     BASE: '/orders',
+    MOMO_INIT: '/orders/momo/init',
     MY: '/orders/my',
     BY_ID: (id: string) => `/orders/${id}`,
     STATUS: (id: string) => `/orders/${id}/status`,

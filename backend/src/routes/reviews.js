@@ -15,13 +15,17 @@ reviewsRouter.get("/", async (req, res) => {
   const productId = String(req.query.productId ?? "").trim();
 
   if (!isDatabaseReady()) {
-    const items = (productId
-      ? db.reviews.filter((review) => review.productId === productId)
-      : db.reviews
+    const items = (
+      productId
+        ? db.reviews.filter((review) => review.productId === productId)
+        : db.reviews
     )
       .slice()
       .sort((first, second) => {
-        return new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime();
+        return (
+          new Date(second.createdAt).getTime() -
+          new Date(first.createdAt).getTime()
+        );
       })
       .map((review) => serializeReview({ _id: review.id, ...review }));
 
@@ -47,7 +51,8 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
     }
 
     const existed = db.reviews.find(
-      (review) => review.productId === payload.productId && review.userId === req.user.id
+      (review) =>
+        review.productId === payload.productId && review.userId === req.user.id,
     );
     if (existed) {
       return res.status(409).json(fail("Ban da danh gia san pham nay", 409));
@@ -61,6 +66,7 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
       rating: payload.rating,
       comment: payload.comment,
       images: payload.images,
+      analysisResult: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -68,7 +74,13 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
     syncMemoryProductRating(payload.productId);
     return res
       .status(201)
-      .json(ok(serializeReview({ _id: review.id, ...review }), "Them danh gia thanh cong", 201));
+      .json(
+        ok(
+          serializeReview({ _id: review.id, ...review }),
+          "Them danh gia thanh cong",
+          201,
+        ),
+      );
   }
 
   const product = await Product.findById(payload.productId);
@@ -76,7 +88,10 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
     return res.status(404).json(fail("Khong tim thay san pham", 404));
   }
 
-  const existed = await Review.findOne({ productId: payload.productId, userId: req.user.id }).lean();
+  const existed = await Review.findOne({
+    productId: payload.productId,
+    userId: req.user.id,
+  }).lean();
   if (existed) {
     return res.status(409).json(fail("Ban da danh gia san pham nay", 409));
   }
@@ -95,7 +110,11 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
 
   await syncProductRating(payload.productId);
 
-  res.status(201).json(ok(serializeReview(review.toObject()), "Them danh gia thanh cong", 201));
+  res
+    .status(201)
+    .json(
+      ok(serializeReview(review.toObject()), "Them danh gia thanh cong", 201),
+    );
 });
 
 reviewsRouter.put("/:id", requireAuth, async (req, res) => {
@@ -114,7 +133,9 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
       return res.status(403).json(fail("Forbidden", 403));
     }
     if (review.productId !== payload.productId) {
-      return res.status(400).json(fail("Khong duoc thay doi san pham cua danh gia", 400));
+      return res
+        .status(400)
+        .json(fail("Khong duoc thay doi san pham cua danh gia", 400));
     }
 
     review.rating = payload.rating;
@@ -123,7 +144,12 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
     review.updatedAt = new Date().toISOString();
     syncMemoryProductRating(payload.productId);
 
-    return res.json(ok(serializeReview({ _id: review.id, ...review }), "Cap nhat danh gia thanh cong"));
+    return res.json(
+      ok(
+        serializeReview({ _id: review.id, ...review }),
+        "Cap nhat danh gia thanh cong",
+      ),
+    );
   }
 
   const review = await Review.findById(req.params.id);
@@ -134,7 +160,9 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
     return res.status(403).json(fail("Forbidden", 403));
   }
   if (review.productId !== payload.productId) {
-    return res.status(400).json(fail("Khong duoc thay doi san pham cua danh gia", 400));
+    return res
+      .status(400)
+      .json(fail("Khong duoc thay doi san pham cua danh gia", 400));
   }
 
   review.rating = payload.rating;
@@ -144,7 +172,9 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
   await review.save();
   await syncProductRating(payload.productId);
 
-  return res.json(ok(serializeReview(review.toObject()), "Cap nhat danh gia thanh cong"));
+  return res.json(
+    ok(serializeReview(review.toObject()), "Cap nhat danh gia thanh cong"),
+  );
 });
 
 reviewsRouter.delete("/:id", requireAuth, async (req, res) => {
@@ -205,16 +235,18 @@ async function syncProductRating(productId) {
     {
       $group: {
         _id: "$productId",
-        avgRating: { $avg: "$rating" }
-      }
-    }
+        avgRating: { $avg: "$rating" },
+      },
+    },
   ]);
 
-  const nextRating = stats[0]?.avgRating ? Number(stats[0].avgRating.toFixed(1)) : 0;
+  const nextRating = stats[0]?.avgRating
+    ? Number(stats[0].avgRating.toFixed(1))
+    : 0;
 
   await Product.findByIdAndUpdate(productId, {
     rating: nextRating,
-    updatedAt: new Date()
+    updatedAt: new Date(),
   });
 }
 
@@ -224,13 +256,16 @@ function syncMemoryProductRating(productId) {
     return;
   }
 
-  const relatedReviews = db.reviews.filter((review) => review.productId === productId);
+  const relatedReviews = db.reviews.filter(
+    (review) => review.productId === productId,
+  );
   const nextRating =
     relatedReviews.length > 0
       ? Number(
           (
-            relatedReviews.reduce((sum, review) => sum + review.rating, 0) / relatedReviews.length
-          ).toFixed(1)
+            relatedReviews.reduce((sum, review) => sum + review.rating, 0) /
+            relatedReviews.length
+          ).toFixed(1),
         )
       : 0;
 
@@ -242,7 +277,9 @@ function normalizeReviewPayload(body) {
   const productId = String(body?.productId ?? "").trim();
   const comment = String(body?.comment ?? "").trim();
   const rating = Number(body?.rating);
-  const images = Array.isArray(body?.images) ? body.images.map((item) => String(item).trim()).filter(Boolean) : [];
+  const images = Array.isArray(body?.images)
+    ? body.images.map((item) => String(item).trim()).filter(Boolean)
+    : [];
 
   if (
     !productId ||

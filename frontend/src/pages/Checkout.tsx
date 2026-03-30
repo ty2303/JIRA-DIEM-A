@@ -1,10 +1,12 @@
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   CreditCard,
   Loader2,
   MapPin,
   Truck,
+  Wallet,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState } from 'react';
@@ -13,6 +15,12 @@ import { Link, useNavigate } from 'react-router';
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import {
+  buildCheckoutCartSignature,
+  clearPendingMomoCheckout,
+  getPendingMomoCheckout,
+  setPendingMomoCheckout,
+} from '@/lib/pendingMomoCheckout';
+import {
   calculateOrderPricing,
   FREE_SHIPPING_THRESHOLD,
 } from '@/lib/orderPricing';
@@ -20,7 +28,12 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useCartStore } from '@/store/useCartStore';
 import { useOrderStore } from '@/store/useOrderStore';
 import type { ApiResponse } from '@/api/types';
-import type { CreateOrderPayload, Order } from '@/types/order';
+import type {
+  CreateMomoOrderResponse,
+  CreateOrderPayload,
+  Order,
+  PaymentMethod,
+} from '@/types/order';
 
 export const Component = Checkout;
 
@@ -42,6 +55,15 @@ type FieldKey =
   | 'ward';
 
 type FieldErrors = Partial<Record<FieldKey, string>>;
+
+function isValidPaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function validate(fd: FormData): FieldErrors {
   const get = (k: string) => ((fd.get(k) as string) ?? '').trim();
@@ -139,6 +161,36 @@ function Checkout() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
+  const [pendingOrderId] = useState(
+    () => getPendingMomoCheckout()?.orderId ?? '',
+  );
+
+  if (items.length === 0 && pendingOrderId) {
+    return (
+      <section className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+        <h2 className="font-display text-2xl font-bold text-text-primary">
+          Giao dịch MoMo đang chờ xác nhận
+        </h2>
+        <p className="mt-2 max-w-xl text-text-secondary">
+          Bạn đã khởi tạo đơn hàng MoMo trước đó. Nếu vừa đóng tab hoặc quay lại
+          giữa chừng, hãy mở lại trang theo dõi đơn hàng để kiểm tra kết quả
+          thanh toán.
+        </p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <Link
+            to={`/checkout/success?orderId=${encodeURIComponent(pendingOrderId)}`}
+            className="btn-primary no-underline"
+          >
+            Xem trạng thái thanh toán
+          </Link>
+          <Link to="/products" className="btn-outline no-underline">
+            Tiếp tục mua sắm
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   if (items.length === 0) {
     return (
@@ -162,6 +214,7 @@ function Checkout() {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (loading) return;
     setError('');
 
     const fd = new FormData(e.currentTarget);
@@ -184,7 +237,7 @@ function Checkout() {
       district: get('district'),
       ward: get('ward'),
       note: get('note') || undefined,
-      paymentMethod: 'COD',
+      paymentMethod,
       items: items.map(({ product, quantity }) => ({
         productId: product.id,
         productName: product.name,
@@ -196,13 +249,38 @@ function Checkout() {
     };
 
     try {
+      if (paymentMethod === 'MOMO') {
+        const res = await apiClient.post<ApiResponse<CreateMomoOrderResponse>>(
+          ENDPOINTS.ORDERS.MOMO_INIT,
+          payload,
+        );
+        const { order, payment } = res.data.data;
+        const paymentUrl = payment.paymentUrl ?? payment.payUrl;
+
+        if (!paymentUrl || !isValidPaymentUrl(paymentUrl)) {
+          setError(
+            'Không nhận được liên kết thanh toán MoMo hợp lệ. Vui lòng thử lại.',
+          );
+          return;
+        }
+
+        addOrder(order);
+        setPendingMomoCheckout(
+          order.id,
+          buildCheckoutCartSignature(payload.items),
+        );
+        window.location.assign(paymentUrl);
+        return;
+      }
+
       const res = await apiClient.post<ApiResponse<Order>>(
         ENDPOINTS.ORDERS.BASE,
         payload,
       );
       const order = res.data.data;
       addOrder(order);
-      clear();
+      clearPendingMomoCheckout();
+      await clear();
       navigate(`/checkout/success?orderId=${encodeURIComponent(order.id)}`, {
         state: { fromCheckout: true, orderId: order.id },
       });
@@ -234,6 +312,28 @@ function Checkout() {
       </div>
 
       <StepBar current={1} />
+
+      {pendingOrderId && (
+        <div className="mb-8 flex items-start gap-3 rounded-2xl border border-[#ae2070]/20 bg-[#ae2070]/5 px-4 py-4 text-sm text-text-secondary">
+          <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-[#ae2070]" />
+          <div>
+            <p className="font-medium text-text-primary">
+              Bạn đang có một giao dịch MoMo chờ hoàn tất.
+            </p>
+            <p className="mt-1">
+              Nếu bạn vừa đóng tab hoặc quay lại giữa chừng, bạn có thể tiếp tục
+              kiểm tra đơn hàng{' '}
+              <Link
+                to={`/checkout/success?orderId=${encodeURIComponent(pendingOrderId)}`}
+                className="font-semibold text-[#ae2070] no-underline hover:underline"
+              >
+                tại đây
+              </Link>
+              .
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-12 lg:grid-cols-12">
         {/* ── Left: Form ── */}
@@ -343,17 +443,82 @@ function Checkout() {
                 <CreditCard className="h-5 w-5 text-brand-accent" />
                 Phương thức thanh toán
               </h2>
-              <div className="rounded-xl border border-brand bg-brand-subtle p-4 ring-1 ring-brand">
-                <div className="flex items-center gap-3">
-                  <Truck className="h-5 w-5 text-brand" />
-                  <span className="font-display text-sm font-semibold text-text-primary">
-                    Thanh toán khi nhận hàng (COD)
-                  </span>
-                </div>
-                <p className="mt-2 text-xs text-text-secondary">
-                  Thanh toán bằng tiền mặt khi nhận được hàng.
-                </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {/* COD */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('COD')}
+                  className={`flex flex-col gap-2 rounded-xl border p-4 text-left transition-all ${
+                    paymentMethod === 'COD'
+                      ? 'border-brand bg-brand-subtle ring-1 ring-brand'
+                      : 'border-border bg-surface-alt hover:border-brand/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+                        paymentMethod === 'COD'
+                          ? 'border-brand bg-brand'
+                          : 'border-border'
+                      }`}
+                    >
+                      {paymentMethod === 'COD' && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                      )}
+                    </span>
+                    <Truck className="h-5 w-5 text-brand" />
+                    <span className="font-display text-sm font-semibold text-text-primary">
+                      Thanh toán khi nhận hàng
+                    </span>
+                  </div>
+                  <p className="pl-7 text-xs text-text-secondary">
+                    Thanh toán bằng tiền mặt khi nhận được hàng.
+                  </p>
+                </button>
+
+                {/* MoMo */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('MOMO')}
+                  className={`flex flex-col gap-2 rounded-xl border p-4 text-left transition-all ${
+                    paymentMethod === 'MOMO'
+                      ? 'border-[#ae2070] bg-[#ae2070]/5 ring-1 ring-[#ae2070]'
+                      : 'border-border bg-surface-alt hover:border-[#ae2070]/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+                        paymentMethod === 'MOMO'
+                          ? 'border-[#ae2070] bg-[#ae2070]'
+                          : 'border-border'
+                      }`}
+                    >
+                      {paymentMethod === 'MOMO' && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                      )}
+                    </span>
+                    <Wallet className="h-5 w-5 text-[#ae2070]" />
+                    <span className="font-display text-sm font-semibold text-text-primary">
+                      Ví điện tử MoMo
+                    </span>
+                  </div>
+                  <p className="pl-7 text-xs text-text-secondary">
+                    Thanh toán nhanh, an toàn qua ứng dụng MoMo.
+                  </p>
+                </button>
               </div>
+
+              {paymentMethod === 'MOMO' && (
+                <motion.p
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-lg border border-[#ae2070]/30 bg-[#ae2070]/5 px-4 py-3 text-xs text-[#ae2070]"
+                >
+                  Sau khi đặt hàng, bạn sẽ được chuyển đến ví MoMo để hoàn tất
+                  thanh toán.
+                </motion.p>
+              )}
             </section>
 
             {/* Note */}
@@ -463,12 +628,19 @@ function Checkout() {
               type="submit"
               form="checkout-form"
               disabled={loading}
-              className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-brand py-4 font-display text-sm font-bold text-white transition-all hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
+              className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl py-4 font-display text-sm font-bold text-white transition-all hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70 ${
+                paymentMethod === 'MOMO' ? 'bg-[#ae2070]' : 'bg-brand'
+              }`}
             >
               {loading ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
                   Đang xử lý...
+                </>
+              ) : paymentMethod === 'MOMO' ? (
+                <>
+                  <Wallet className="h-5 w-5" />
+                  Tiếp tục với MoMo
                 </>
               ) : (
                 'Đặt hàng ngay'
