@@ -489,16 +489,17 @@ ordersRouter.post("/momo/ipn", express.json(), async (req, res) => {
   try {
     const orderId = String(req.body?.orderId ?? "").trim();
     const resultCode = parseMomoResultCode(req.body?.resultCode);
+    const amount = Number(req.body?.amount);
     const transId = req.body?.transId == null ? null : String(req.body.transId);
     const requestId = req.body?.requestId == null ? null : String(req.body.requestId);
 
-    if (!orderId || resultCode == null) {
+    if (!orderId || resultCode == null || !Number.isFinite(amount) || amount < 0) {
       return res.status(400).json(fail("Thiếu thông tin kết quả thanh toán MoMo", 400));
     }
 
-    if (!verifyMomoCallbackSignature(req.body)) {
-      return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
-    }
+  if (!verifyMomoCallbackSignature(req.body)) {
+    return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
+  }
 
     await applyMomoPaymentResult({ orderId, resultCode, transId, requestId });
     return res.status(204).end();
