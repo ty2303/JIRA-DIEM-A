@@ -58,6 +58,7 @@ export function serializeOrder(order) {
     paymentStatus: order.paymentStatus,
     momoRequestId: order.momoRequestId ?? null,
     momoTransactionId: order.momoTransactionId ?? null,
+    paidAt: toIso(order.paidAt) ?? null,
     cancelReason: order.cancelReason,
     cancelledBy: order.cancelledBy,
     createdAt: toIso(order.createdAt),
