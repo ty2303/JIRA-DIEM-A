@@ -80,7 +80,10 @@ function Profile() {
   const syncUser = useAuthStore((state) => state.syncUser);
   const addToast = useToastStore((s) => s.addToast);
   const location = useLocation();
-  const locationState = location.state as { tab?: string } | null;
+  const locationState = location.state as {
+    tab?: string;
+    expandedOrderId?: string;
+  } | null;
   const [activeTab, setActiveTab] = useState<'account' | 'orders'>(
     locationState?.tab === 'orders' ? 'orders' : 'account',
   );
@@ -110,7 +113,11 @@ function Profile() {
   const ordersLoading = useOrderStore((s) => s.isLoading);
   const fetchOrders = useOrderStore((s) => s.fetchOrders);
   const cancelOrderInStore = useOrderStore((s) => s.cancelOrder);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(
+    locationState?.tab === 'orders'
+      ? locationState.expandedOrderId ?? null
+      : null,
+  );
 
   // Cancel modal
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(
