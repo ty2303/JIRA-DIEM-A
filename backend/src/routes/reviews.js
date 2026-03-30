@@ -4,7 +4,10 @@ import { isDatabaseReady } from "../data/mongodb.js";
 import { db } from "../data/store.js";
 import { fail, ok } from "../lib/apiResponse.js";
 import { serializeReview } from "../lib/catalogSerializers.js";
-import { uploadReviewImage } from "../lib/reviewImageUpload.js";
+import {
+  isUploadableReviewImageData,
+  uploadReviewImage,
+} from "../lib/reviewImageUpload.js";
 import { Product } from "../models/Product.js";
 import { Review } from "../models/Review.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -227,14 +230,13 @@ reviewsRouter.delete("/:id", requireAuth, async (req, res) => {
 
 reviewsRouter.post("/upload-image", requireAuth, async (req, res) => {
   const imageData = String(req.body?.imageData ?? "").trim();
-  const folder = String(req.body?.folder ?? "reviews").trim() || "reviews";
 
   if (!imageData) {
     return res.status(400).json(fail("Anh review khong hop le", 400));
   }
 
   try {
-    const imageUrl = await uploadReviewImage(imageData, folder);
+    const imageUrl = await uploadReviewImage(imageData, "reviews");
     return res.json(ok(imageUrl, "Upload anh thanh cong"));
   } catch (error) {
     return res
@@ -292,13 +294,18 @@ function normalizeReviewPayload(body) {
   const comment = String(body?.comment ?? "").trim();
   const rating = Number(body?.rating);
   const images = Array.isArray(body?.images)
-    ? body.images.map((item) => String(item).trim()).filter(Boolean)
+    ? body.images
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .filter(isValidReviewImage)
     : [];
+  const rawImageCount = Array.isArray(body?.images) ? body.images.length : 0;
 
   if (
     !productId ||
     !comment ||
     comment.length > 1000 ||
+    rawImageCount !== images.length ||
     images.length > 5 ||
     !Number.isFinite(rating) ||
     rating < 1 ||
@@ -313,4 +320,17 @@ function normalizeReviewPayload(body) {
     rating,
     images,
   };
+}
+
+function isValidReviewImage(value) {
+  return isHttpUrl(value) || isUploadableReviewImageData(value);
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

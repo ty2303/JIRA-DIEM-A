@@ -19,12 +19,16 @@ dotenv.config();
 
 export const app = express();
 
+const reviewJsonParser = express.json({ limit: "15mb" });
+
 app.use(
   cors({
     origin: process.env.FRONTEND_URL?.split(",") ?? "*",
     credentials: true
   })
 );
+app.use("/api/products/:id/reviews", reviewJsonParser);
+app.use("/api/reviews", reviewJsonParser);
 app.use(express.json());
 app.use(morgan("dev"));
 app.use(attachUser);
