@@ -572,19 +572,28 @@ ordersRouter.post("/momo/ipn", express.json(), async (req, res) => {
   try {
     const orderId = String(req.body?.orderId ?? "").trim();
     const resultCode = parseMomoResultCode(req.body?.resultCode);
+    const amount = Number(req.body?.amount);
     const transId = req.body?.transId == null ? null : String(req.body.transId);
 
-    if (!orderId || resultCode == null) {
+    if (!orderId || resultCode == null || !Number.isFinite(amount) || amount < 0) {
       return res.status(400).json(fail("Thiếu thông tin kết quả thanh toán MoMo", 400));
     }
 
-    if (!verifyMomoCallbackSignature(req.body)) {
-      return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
-    }
+  if (!verifyMomoCallbackSignature(req.body)) {
+    return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
+  }
 
-    await applyMomoPaymentResult(orderId, resultCode, transId);
-    return res.status(204).end();
-  } catch (error) {
+  if (resultCode === 0 && !transId) {
+    return res.status(400).json(fail("Thiếu mã giao dịch MoMo", 400));
+  }
+
+  const updated = await applyMomoPaymentResult(orderId, resultCode, transId);
+  if (!updated) {
+    return res.status(404).json(fail("Không tìm thấy đơn hàng thanh toán MoMo", 404));
+  }
+
+  return res.status(204).end();
+} catch (error) {
     if (error instanceof MomoConfigError) {
       return res.status(error.status).json(fail(error.message, error.status));
     }
