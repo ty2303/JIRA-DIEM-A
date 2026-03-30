@@ -23,7 +23,12 @@ import CancelOrderModal from '@/components/ui/CancelOrderModal';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useOrderStore } from '@/store/useOrderStore';
 import { useToastStore } from '@/store/useToastStore';
-import { ORDER_STATUS_COLOR, ORDER_STATUS_LABEL } from '@/types/order';
+import {
+  ORDER_STATUS_COLOR,
+  ORDER_STATUS_LABEL,
+  PAYMENT_STATUS_COLOR,
+  PAYMENT_STATUS_LABEL,
+} from '@/types/order';
 
 interface UserProfile {
   id: string;
@@ -728,8 +733,10 @@ function Profile() {
                                     <span className="text-text-muted">
                                       Trạng thái TT:{' '}
                                     </span>
-                                    <span className="font-medium text-text-primary">
-                                      {order.paymentStatus}
+                                    <span
+                                      className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_STATUS_COLOR[order.paymentStatus]}`}
+                                    >
+                                      {PAYMENT_STATUS_LABEL[order.paymentStatus]}
                                     </span>
                                   </div>
                                 )}

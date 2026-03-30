@@ -330,6 +330,7 @@ export function createOrder(payload, user) {
     paymentStatus: payload.paymentMethod === "MOMO" ? "PENDING" : "UNPAID",
     momoRequestId: null,
     momoTransactionId: null,
+    paidAt: null,
   };
 
   for (const item of payload.items) {

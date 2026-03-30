@@ -20,7 +20,7 @@ import {
 } from '@/lib/pendingMomoCheckout';
 import { useCartStore } from '@/store/useCartStore';
 import { useOrderStore } from '@/store/useOrderStore';
-import { ORDER_STATUS_LABEL } from '@/types/order';
+import { ORDER_STATUS_LABEL, PAYMENT_STATUS_LABEL } from '@/types/order';
 
 export const Component = CheckoutSuccess;
 
@@ -45,14 +45,10 @@ function getPaymentStatusLabel(paymentStatus?: string, paymentMethod?: string) {
     return 'Thanh toán khi nhận hàng';
   }
 
-  switch (paymentStatus) {
-    case 'PAID':
-      return 'Đã thanh toán';
-    case 'UNPAID':
-      return 'Chưa thanh toán';
-    default:
-      return paymentStatus ?? 'Chưa cập nhật';
-  }
+  return paymentStatus
+    ? PAYMENT_STATUS_LABEL[paymentStatus as keyof typeof PAYMENT_STATUS_LABEL] ??
+        paymentStatus
+    : 'Chưa cập nhật';
 }
 
 function parseResultCode(value: string | null) {
@@ -70,7 +66,19 @@ function getCheckoutPageState(
     if (paymentStatus === 'PAID') return 'success';
     if (paymentStatus === 'FAILED' || paymentStatus === 'REFUNDED')
       return 'failure';
-    if (resultCode != null && resultCode !== 0) return 'failure';
+
+    if (paymentStatus === 'PENDING') {
+      return 'pending';
+    }
+
+    if (resultCode === 0 || resultCode === 1000 || resultCode === 7000 || resultCode === 7002) {
+      return 'pending';
+    }
+
+    if (resultCode != null) {
+      return 'failure';
+    }
+
     return 'pending';
   }
 
@@ -359,6 +367,12 @@ function CheckoutSuccess() {
                           order.paymentMethod,
                         )}
                       </p>
+                      {order.paidAt && (
+                        <p className="mt-1 text-xs text-text-muted">
+                          Xác nhận lúc{' '}
+                          {new Date(order.paidAt).toLocaleString('vi-VN')}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

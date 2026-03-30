@@ -59,6 +59,10 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    paidAt: {
+      type: Date,
+      default: null,
+    },
     cancelReason: { type: String },
     cancelledBy: { type: String, enum: ["USER", "ADMIN"] },
     createdAt: { type: Date, default: Date.now },
