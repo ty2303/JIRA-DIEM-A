@@ -200,4 +200,66 @@ describe('Profile order history summary', () => {
       screen.queryByLabelText('Mật khẩu hiện tại'),
     ).not.toBeInTheDocument();
   });
+
+  test('expands the targeted order when arriving from checkout result state', async () => {
+    const [{ Component: Profile }, { useAuthStore }, { useOrderStore }] =
+      await Promise.all([
+        import('@/pages/Profile'),
+        import('@/store/useAuthStore'),
+        import('@/store/useOrderStore'),
+      ]);
+
+    apiClientMock.get.mockResolvedValue({
+      data: {
+        data: {
+          id: 'user-1',
+          username: 'demo',
+          email: 'demo@example.com',
+          role: 'USER',
+          hasPassword: true,
+          authProvider: 'local',
+          avatar: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+
+    useAuthStore.setState({
+      token: 'token',
+      user: {
+        id: 'user-1',
+        username: 'demo',
+        email: 'demo@example.com',
+        role: 'USER',
+        authProvider: 'local',
+        hasPassword: true,
+        avatar: null,
+      },
+      isLoggedIn: true,
+      isAdmin: false,
+    });
+
+    useOrderStore.setState({
+      orders: [order],
+      isLoading: false,
+      fetchOrders: vi.fn().mockResolvedValue(undefined),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+    });
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/profile',
+            state: { tab: 'orders', expandedOrderId: order.id },
+          },
+        ]}
+      >
+        <Profile />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Nguyen Van A')).toBeInTheDocument();
+    expect(screen.getByText('123 Nguyen Hue, Ben Nghe, Quan 1, TP. Ho Chi Minh')).toBeInTheDocument();
+  });
 });
