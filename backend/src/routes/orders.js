@@ -15,6 +15,11 @@ import { sendToUser } from "../lib/realtime.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { Order } from "../models/Order.js";
 import { Product } from "../models/Product.js";
+import {
+  applyMomoPaymentResult,
+  cancelMomoPendingOrder,
+  MOMO_PENDING_RESULT_CODES,
+} from "../services/momoPaymentService.js";
 
 export const ordersRouter = express.Router();
 
@@ -27,7 +32,6 @@ const VALID_TRANSITIONS = {
   CANCELLED: [],
 };
 const CANCELLABLE_STATUSES = ["PENDING", "CONFIRMED"];
-const MOMO_FAILURE_REASON = "Thanh toán MoMo không thành công";
 
 function validateOrderPayload(payload, paymentMethod) {
   const { email, customerName, phone, address, city, district, ward, items } = payload;
@@ -94,83 +98,6 @@ function buildMomoRedirectUrl(orderId) {
 function parseMomoResultCode(value) {
   const resultCode = Number(value);
   return Number.isFinite(resultCode) ? resultCode : null;
-}
-
-async function syncMongoOrderPayment(orderId, resultCode, transId) {
-  const order = await Order.findById(orderId).lean();
-  if (!order || order.paymentMethod !== "MOMO") {
-    return false;
-  }
-
-  if (order.paymentStatus === "PAID") {
-    return true;
-  }
-
-  if (resultCode === 0) {
-    await Order.findByIdAndUpdate(orderId, {
-      paymentStatus: "PAID",
-      momoTransactionId: transId ?? order.momoTransactionId ?? null,
-    });
-    return true;
-  }
-
-  if (order.paymentStatus !== "FAILED") {
-    await Order.findByIdAndUpdate(orderId, {
-      status: "CANCELLED",
-      paymentStatus: "FAILED",
-      momoTransactionId: transId ?? order.momoTransactionId ?? null,
-      cancelReason: MOMO_FAILURE_REASON,
-    });
-
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.productId, {
-        $inc: { stock: item.quantity },
-        updatedAt: new Date(),
-      });
-    }
-  }
-
-  return true;
-}
-
-function syncMemoryOrderPayment(orderId, resultCode, transId) {
-  const order = db.orders.find((item) => item.id === orderId);
-  if (!order || order.paymentMethod !== "MOMO") {
-    return false;
-  }
-
-  if (order.paymentStatus === "PAID") {
-    return true;
-  }
-
-  if (resultCode === 0) {
-    order.paymentStatus = "PAID";
-    order.momoTransactionId = transId ?? order.momoTransactionId ?? null;
-    return true;
-  }
-
-  if (order.paymentStatus !== "FAILED") {
-    order.status = "CANCELLED";
-    order.paymentStatus = "FAILED";
-    order.momoTransactionId = transId ?? order.momoTransactionId ?? null;
-    order.cancelReason = MOMO_FAILURE_REASON;
-    restoreReservedStockForOrder(order);
-  }
-
-  return true;
-}
-
-async function applyMomoPaymentResult(orderId, resultCode, transId) {
-  try {
-    const updatedMongo = await syncMongoOrderPayment(orderId, resultCode, transId);
-    if (updatedMongo) {
-      return true;
-    }
-  } catch {
-    return syncMemoryOrderPayment(orderId, resultCode, transId);
-  }
-
-  return syncMemoryOrderPayment(orderId, resultCode, transId);
 }
 
 /** GET / - Danh sách tất cả đơn hàng (admin) */
@@ -537,16 +464,6 @@ ordersRouter.get("/momo/return", async (req, res) => {
     return res.status(404).json(fail("Không tìm thấy đơn hàng", 404));
   }
 
-  // Optimistic update only when signature is valid AND IPN hasn't already settled the order
-  if (signatureValid && order.paymentStatus !== "PAID" && order.paymentStatus !== "FAILED") {
-    try {
-      await applyMomoPaymentResult(orderId, resultCode, transId);
-      console.log("[MoMo Return] Optimistic update applied:", { orderId, resultCode });
-    } catch (updateError) {
-      console.error("[MoMo Return] Optimistic update failed:", updateError.message);
-    }
-  }
-
   if (frontendUrl) {
     const url = new URL(`${frontendUrl}/checkout/success`);
     url.searchParams.set("orderId", orderId);
@@ -563,7 +480,7 @@ ordersRouter.get("/momo/return", async (req, res) => {
     message: momoMessage ?? null,
     transId,
     paymentMethod: "MOMO",
-    paymentStatus: resultCode === 0 ? "PAID" : resultCode === 1000 ? "PENDING" : "FAILED",
+    paymentStatus: resultCode === 0 || MOMO_PENDING_RESULT_CODES.has(resultCode) ? "PENDING" : "FAILED",
     redirectUrl: null,
   }, resultCode === 0 ? "Thanh toán thành công" : "Kết quả thanh toán MoMo"));
 });
@@ -572,17 +489,19 @@ ordersRouter.post("/momo/ipn", express.json(), async (req, res) => {
   try {
     const orderId = String(req.body?.orderId ?? "").trim();
     const resultCode = parseMomoResultCode(req.body?.resultCode);
+    const amount = Number(req.body?.amount);
     const transId = req.body?.transId == null ? null : String(req.body.transId);
+    const requestId = req.body?.requestId == null ? null : String(req.body.requestId);
 
-    if (!orderId || resultCode == null) {
+    if (!orderId || resultCode == null || !Number.isFinite(amount) || amount < 0) {
       return res.status(400).json(fail("Thiếu thông tin kết quả thanh toán MoMo", 400));
     }
 
-    if (!verifyMomoCallbackSignature(req.body)) {
-      return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
-    }
+  if (!verifyMomoCallbackSignature(req.body)) {
+    return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
+  }
 
-    await applyMomoPaymentResult(orderId, resultCode, transId);
+    await applyMomoPaymentResult({ orderId, resultCode, transId, requestId });
     return res.status(204).end();
   } catch (error) {
     if (error instanceof MomoConfigError) {
@@ -666,6 +585,21 @@ ordersRouter.patch("/:id/cancel", requireAuth, async (req, res) => {
       if (!CANCELLABLE_STATUSES.includes(memOrder.status)) {
         return res.status(400).json(fail("Khong the huy don hang o trang thai nay", 400));
       }
+
+      if (memOrder.paymentMethod === "MOMO") {
+        const momoCancelResult = await cancelMomoPendingOrder({
+          orderId: memOrder.id,
+          cancelReason,
+          cancelledBy,
+        });
+
+        if (momoCancelResult.reason === "paid") {
+          return res.status(400).json(fail("Không thể hủy đơn MoMo đã thanh toán", 400));
+        }
+
+        return res.json(ok(momoCancelResult.order, "Hủy đơn hàng thành công"));
+      }
+
       memOrder.status = "CANCELLED";
       memOrder.cancelReason = cancelReason;
       memOrder.cancelledBy = cancelledBy;
@@ -680,6 +614,20 @@ ordersRouter.patch("/:id/cancel", requireAuth, async (req, res) => {
 
     if (!CANCELLABLE_STATUSES.includes(order.status)) {
       return res.status(400).json(fail("Khong the huy don hang o trang thai nay", 400));
+    }
+
+    if (order.paymentMethod === "MOMO") {
+      const momoCancelResult = await cancelMomoPendingOrder({
+        orderId: req.params.id,
+        cancelReason,
+        cancelledBy,
+      });
+
+      if (momoCancelResult.reason === "paid") {
+        return res.status(400).json(fail("Không thể hủy đơn MoMo đã thanh toán", 400));
+      }
+
+      return res.json(ok(serializeOrder(momoCancelResult.order), "Hủy đơn hàng thành công"));
     }
 
     const updated = await Order.findByIdAndUpdate(
@@ -707,6 +655,21 @@ ordersRouter.patch("/:id/cancel", requireAuth, async (req, res) => {
     if (!CANCELLABLE_STATUSES.includes(memOrder.status)) {
       return res.status(400).json(fail("Khong the huy don hang o trang thai nay", 400));
     }
+
+    if (memOrder.paymentMethod === "MOMO") {
+      const momoCancelResult = await cancelMomoPendingOrder({
+        orderId: memOrder.id,
+        cancelReason,
+        cancelledBy,
+      });
+
+      if (momoCancelResult.reason === "paid") {
+        return res.status(400).json(fail("Không thể hủy đơn MoMo đã thanh toán", 400));
+      }
+
+      return res.json(ok(momoCancelResult.order, "Hủy đơn hàng thành công"));
+    }
+
     memOrder.status = "CANCELLED";
     memOrder.cancelReason = cancelReason;
     memOrder.cancelledBy = cancelledBy;

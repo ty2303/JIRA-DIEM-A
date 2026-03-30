@@ -1251,6 +1251,7 @@ describe("Order pricing", () => {
       const order = db.orders.find((item) => item.id === orderId);
       assert.equal(order?.paymentStatus, "PAID");
       assert.equal(order?.momoTransactionId, "70000001");
+      assert.ok(order?.paidAt);
 
       removeTestOrder(orderId);
     });
@@ -1351,13 +1352,14 @@ describe("Order pricing", () => {
       const order = db.orders.find((item) => item.id === orderId);
       assert.equal(order?.status, "CANCELLED");
       assert.equal(order?.paymentStatus, "FAILED");
+      assert.equal(order?.paidAt ?? null, null);
       assert.equal(product.stock, initialStock);
 
 			removeTestOrder(orderId);
 		});
 	});
 
-	test("GET /api/orders/momo/return redirects to frontend with correct query params on success", async () => {
+	test("GET /api/orders/momo/return redirects to frontend with correct query params on success without settling the order", async () => {
 		await withServer(async (port) => {
 			process.env.FRONTEND_URL = "http://localhost:5173";
 			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
@@ -1410,7 +1412,8 @@ describe("Order pricing", () => {
 				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
 
 				const order = db.orders.find((item) => item.id === testOrder.id);
-				assert.equal(order?.paymentStatus, "PAID");
+				assert.equal(order?.paymentStatus, "PENDING");
+				assert.equal(order?.paidAt ?? null, null);
 			} finally {
 				removeTestOrder(testOrder.id);
 			}
@@ -1466,6 +1469,9 @@ describe("Order pricing", () => {
 				const redirectUrl = new URL(location);
 				assert.equal(redirectUrl.searchParams.get("resultCode"), "1006");
 				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
+
+				const order = db.orders.find((item) => item.id === testOrder.id);
+				assert.equal(order?.paymentStatus, "PENDING");
 			} finally {
 				removeTestOrder(testOrder.id);
 			}
@@ -1540,6 +1546,7 @@ describe("Order pricing", () => {
 
 				const order = db.orders.find((item) => item.id === testOrder.id);
 				assert.equal(order?.paymentStatus, "PENDING");
+				assert.equal(order?.paidAt ?? null, null);
 			} finally {
 				removeTestOrder(testOrder.id);
 			}
@@ -1559,6 +1566,7 @@ describe("Order pricing", () => {
 			const testOrder = createTestOrder({
 				paymentMethod: "MOMO",
 				paymentStatus: "PAID",
+				paidAt: "2026-03-30T00:00:00.000Z",
 				momoRequestId: "momo-req-return-already-paid",
 				momoTransactionId: "70000099",
 			});
@@ -1595,6 +1603,158 @@ describe("Order pricing", () => {
 				const order = db.orders.find((item) => item.id === testOrder.id);
 				assert.equal(order?.paymentStatus, "PAID");
 				assert.equal(order?.momoTransactionId, "70000099");
+				assert.equal(order?.paidAt, "2026-03-30T00:00:00.000Z");
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
+
+	test("GET /api/orders/momo/return arriving before IPN does not settle, but later IPN success marks the order paid", async () => {
+		await withServer(async (port) => {
+			process.env.FRONTEND_URL = "http://localhost:5173";
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PENDING",
+				momoRequestId: "momo-req-return-before-ipn",
+			});
+
+			try {
+				const returnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-return-before-ipn",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "80000005",
+					resultCode: "0",
+					message: "Thành công",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				returnPayload.signature = createMomoCallbackSignature(
+					returnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const returnQuery = new URLSearchParams(returnPayload).toString();
+				const returnResponse = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/return?${returnQuery}`,
+					{ redirect: "manual" },
+				);
+
+				assert.equal(returnResponse.status, 302);
+				assert.equal(testOrder.paymentStatus, "PENDING");
+
+				const ipnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-return-before-ipn",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "70000005",
+					resultCode: 0,
+					message: "Success",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				ipnPayload.signature = createMomoCallbackSignature(
+					ipnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const ipnResponse = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(ipnPayload),
+					},
+				);
+
+				assert.equal(ipnResponse.status, 204);
+				assert.equal(testOrder.paymentStatus, "PAID");
+				assert.ok(testOrder.paidAt);
+			} finally {
+				removeTestOrder(testOrder.id);
+			}
+		});
+	});
+
+	test("POST /api/orders/momo/ipn ignores duplicate success notifications", async () => {
+		await withServer(async (port) => {
+			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
+			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+			const testOrder = createTestOrder({
+				paymentMethod: "MOMO",
+				paymentStatus: "PENDING",
+				momoRequestId: "momo-req-duplicate-ipn",
+			});
+
+			try {
+				const ipnPayload = {
+					partnerCode: "MOMO_PARTNER",
+					orderId: testOrder.id,
+					requestId: "momo-req-duplicate-ipn",
+					amount: "27990000",
+					orderInfo: `Thanh toan don hang ${testOrder.id}`,
+					orderType: "momo_wallet",
+					transId: "70000006",
+					resultCode: 0,
+					message: "Success",
+					payType: "qr",
+					responseTime: String(Date.now()),
+					extraData: "",
+				};
+				ipnPayload.signature = createMomoCallbackSignature(
+					ipnPayload,
+					process.env.MOMO_ACCESS_KEY,
+					process.env.MOMO_SECRET_KEY,
+				);
+
+				const firstResponse = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(ipnPayload),
+					},
+				);
+				assert.equal(firstResponse.status, 204);
+
+				const firstPaidAt = testOrder.paidAt;
+				assert.ok(firstPaidAt);
+
+				const secondResponse = await fetch(
+					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(ipnPayload),
+					},
+				);
+
+				assert.equal(secondResponse.status, 204);
+				assert.equal(testOrder.paymentStatus, "PAID");
+				assert.equal(testOrder.paidAt, firstPaidAt);
 			} finally {
 				removeTestOrder(testOrder.id);
 			}
@@ -1668,19 +1828,64 @@ test("PATCH /api/orders/:id/cancel restores stock for fallback-created orders", 
   });
 });
 
+test("PATCH /api/orders/:id/cancel rejects a paid MoMo order", async () => {
+  await withServer(async (port) => {
+    const testOrder = createTestOrder({
+      paymentMethod: "MOMO",
+      paymentStatus: "PAID",
+      paidAt: "2026-03-30T00:00:00.000Z",
+      momoRequestId: "momo-req-paid-order",
+      momoTransactionId: "70000099",
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/orders/${testOrder.id}/cancel?reason=Kh%C3%B4ng%20c%C3%B2n%20nhu%20c%E1%BA%A7u`,
+        {
+          method: "PATCH",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+      const body = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.match(body.message, /MoMo đã thanh toán/i);
+      assert.equal(testOrder.paymentStatus, "PAID");
+      assert.equal(testOrder.status, "PENDING");
+    } finally {
+      removeTestOrder(testOrder.id);
+    }
+  });
+});
+
 // =============================================================================
 // REVIEWS (no AI analysis)
 // =============================================================================
 
 describe("Reviews", () => {
+  const productSnapshots = new Map(
+    ["prod-iphone-15", "prod-galaxy-s25", "prod-xiaomi-14"]
+      .map((productId) => {
+        const product = db.products.find((item) => item.id === productId);
+        return product ? [productId, structuredClone(product)] : null;
+      })
+      .filter(Boolean),
+  );
+
   afterEach(() => {
     db.reviews = db.reviews.filter(
       (r) => r.id === "review-1" || r.id === "review-2",
     );
-    const iphone = db.products.find((p) => p.id === "prod-iphone-15");
-    if (iphone) iphone.rating = 4.9;
-    const galaxy = db.products.find((p) => p.id === "prod-galaxy-s25");
-    if (galaxy) galaxy.rating = 4.8;
+
+    for (const [productId, snapshot] of productSnapshots.entries()) {
+      const product = db.products.find((item) => item.id === productId);
+      if (!product) {
+        continue;
+      }
+
+      product.rating = snapshot.rating;
+      product.updatedAt = snapshot.updatedAt;
+    }
   });
 
   test("GET /api/reviews returns all reviews", async () => {
@@ -1746,6 +1951,145 @@ describe("Reviews", () => {
         }),
       });
       assert.equal(res.status, 400);
+    });
+  });
+
+  test("POST /api/products/:id/reviews creates a product-scoped review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 5,
+            comment: "Camera tot, pin on",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+      
+      assert.equal(res.status, 201);
+      assert.equal(body.data.productId, "prod-xiaomi-14");
+      assert.equal(body.data.rating, 5);
+
+      const xiaomi = db.products.find((product) => product.id === "prod-xiaomi-14");
+      assert.ok(xiaomi);
+      assert.equal(xiaomi.rating, 5);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 401 without auth", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rating: 5,
+            comment: "Khong co token",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 401);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 404 when product does not exist", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-not-found/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 4,
+            comment: "San pham khong ton tai",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 400 for invalid payload", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 0,
+            comment: "Invalid rating",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 400);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 409 for duplicate user review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-iphone-15/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 4,
+            comment: "Danh gia lan 2",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 409);
+    });
+  });
+
+  test("POST /api/products/:id/reviews uses product id from path over body", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 5,
+            comment: "Path phai uu tien",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.productId, "prod-xiaomi-14");
     });
   });
 

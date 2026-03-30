@@ -48,6 +48,7 @@ export interface Order {
   discount: number;
   total: number;
   createdAt: string;
+  paidAt?: string | null;
   paymentStatus: PaymentStatus;
   momoTransactionId?: string | null;
   momoRequestId?: string | null;

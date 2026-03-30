@@ -23,7 +23,12 @@ import CancelOrderModal from '@/components/ui/CancelOrderModal';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useOrderStore } from '@/store/useOrderStore';
 import { useToastStore } from '@/store/useToastStore';
-import { ORDER_STATUS_COLOR, ORDER_STATUS_LABEL } from '@/types/order';
+import {
+  ORDER_STATUS_COLOR,
+  ORDER_STATUS_LABEL,
+  PAYMENT_STATUS_COLOR,
+  PAYMENT_STATUS_LABEL,
+} from '@/types/order';
 
 interface UserProfile {
   id: string;
@@ -75,7 +80,10 @@ function Profile() {
   const syncUser = useAuthStore((state) => state.syncUser);
   const addToast = useToastStore((s) => s.addToast);
   const location = useLocation();
-  const locationState = location.state as { tab?: string } | null;
+  const locationState = location.state as {
+    tab?: string;
+    expandedOrderId?: string;
+  } | null;
   const [activeTab, setActiveTab] = useState<'account' | 'orders'>(
     locationState?.tab === 'orders' ? 'orders' : 'account',
   );
@@ -105,7 +113,11 @@ function Profile() {
   const ordersLoading = useOrderStore((s) => s.isLoading);
   const fetchOrders = useOrderStore((s) => s.fetchOrders);
   const cancelOrderInStore = useOrderStore((s) => s.cancelOrder);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(
+    locationState?.tab === 'orders'
+      ? locationState.expandedOrderId ?? null
+      : null,
+  );
 
   // Cancel modal
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(
@@ -728,8 +740,10 @@ function Profile() {
                                     <span className="text-text-muted">
                                       Trạng thái TT:{' '}
                                     </span>
-                                    <span className="font-medium text-text-primary">
-                                      {order.paymentStatus}
+                                    <span
+                                      className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_STATUS_COLOR[order.paymentStatus]}`}
+                                    >
+                                      {PAYMENT_STATUS_LABEL[order.paymentStatus]}
                                     </span>
                                   </div>
                                 )}

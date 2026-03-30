@@ -38,7 +38,21 @@ reviewsRouter.get("/", async (req, res) => {
 });
 
 reviewsRouter.post("/", requireAuth, async (req, res) => {
-  const payload = normalizeReviewPayload(req.body);
+  return createReview(req, res);
+});
+
+export async function createReview(req, res, options = {}) {
+  const hasForcedProductId = Object.prototype.hasOwnProperty.call(
+    options,
+    "productId",
+  );
+  const productId = hasForcedProductId
+    ? String(options.productId ?? "").trim()
+    : String(req.body?.productId ?? "").trim();
+  const payload = normalizeReviewPayload({
+    ...req.body,
+    productId,
+  });
 
   if (!payload) {
     return res.status(400).json(fail("Danh gia khong hop le", 400));
@@ -115,7 +129,7 @@ reviewsRouter.post("/", requireAuth, async (req, res) => {
     .json(
       ok(serializeReview(review.toObject()), "Them danh gia thanh cong", 201),
     );
-});
+}
 
 reviewsRouter.put("/:id", requireAuth, async (req, res) => {
   const payload = normalizeReviewPayload(req.body);
