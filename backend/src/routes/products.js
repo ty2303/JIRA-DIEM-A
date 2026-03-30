@@ -6,7 +6,8 @@ import { fail, ok } from "../lib/apiResponse.js";
 import { serializeProduct } from "../lib/catalogSerializers.js";
 import { Category } from "../models/Category.js";
 import { Product } from "../models/Product.js";
-import { requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { createReview } from "./reviews.js";
 
 export const productsRouter = express.Router();
 
@@ -100,6 +101,10 @@ productsRouter.get("/:id", async (req, res) => {
     : null;
 
   return res.json(ok(serializeProduct(product, category?.name ?? "")));
+});
+
+productsRouter.post("/:id/reviews", requireAuth, async (req, res) => {
+  return createReview(req, res, { productId: req.params.id });
 });
 
 productsRouter.post("/", requireAdmin, async (req, res) => {

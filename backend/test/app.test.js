@@ -1863,14 +1863,29 @@ test("PATCH /api/orders/:id/cancel rejects a paid MoMo order", async () => {
 // =============================================================================
 
 describe("Reviews", () => {
+  const productSnapshots = new Map(
+    ["prod-iphone-15", "prod-galaxy-s25", "prod-xiaomi-14"]
+      .map((productId) => {
+        const product = db.products.find((item) => item.id === productId);
+        return product ? [productId, structuredClone(product)] : null;
+      })
+      .filter(Boolean),
+  );
+
   afterEach(() => {
     db.reviews = db.reviews.filter(
       (r) => r.id === "review-1" || r.id === "review-2",
     );
-    const iphone = db.products.find((p) => p.id === "prod-iphone-15");
-    if (iphone) iphone.rating = 4.9;
-    const galaxy = db.products.find((p) => p.id === "prod-galaxy-s25");
-    if (galaxy) galaxy.rating = 4.8;
+
+    for (const [productId, snapshot] of productSnapshots.entries()) {
+      const product = db.products.find((item) => item.id === productId);
+      if (!product) {
+        continue;
+      }
+
+      product.rating = snapshot.rating;
+      product.updatedAt = snapshot.updatedAt;
+    }
   });
 
   test("GET /api/reviews returns all reviews", async () => {
@@ -1936,6 +1951,145 @@ describe("Reviews", () => {
         }),
       });
       assert.equal(res.status, 400);
+    });
+  });
+
+  test("POST /api/products/:id/reviews creates a product-scoped review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 5,
+            comment: "Camera tot, pin on",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+      
+      assert.equal(res.status, 201);
+      assert.equal(body.data.productId, "prod-xiaomi-14");
+      assert.equal(body.data.rating, 5);
+
+      const xiaomi = db.products.find((product) => product.id === "prod-xiaomi-14");
+      assert.ok(xiaomi);
+      assert.equal(xiaomi.rating, 5);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 401 without auth", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rating: 5,
+            comment: "Khong co token",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 401);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 404 when product does not exist", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-not-found/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 4,
+            comment: "San pham khong ton tai",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 400 for invalid payload", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 0,
+            comment: "Invalid rating",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 400);
+    });
+  });
+
+  test("POST /api/products/:id/reviews returns 409 for duplicate user review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-iphone-15/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rating: 4,
+            comment: "Danh gia lan 2",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 409);
+    });
+  });
+
+  test("POST /api/products/:id/reviews uses product id from path over body", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/products/prod-xiaomi-14/reviews`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 5,
+            comment: "Path phai uu tien",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.productId, "prod-xiaomi-14");
     });
   });
 
