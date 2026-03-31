@@ -1,20 +1,61 @@
 export type ReviewSentiment = 'positive' | 'negative' | 'neutral';
 
-export interface ReviewAnalysisResult {
+/**
+ * 11 supported aspect categories for phone product reviews.
+ */
+export type ReviewAspect =
+  | 'Battery'
+  | 'Camera'
+  | 'Performance'
+  | 'Display'
+  | 'Design'
+  | 'Packaging'
+  | 'Price'
+  | 'Shop_Service'
+  | 'Shipping'
+  | 'General'
+  | 'Others';
+
+/** Vietnamese labels for each aspect. */
+export const ASPECT_LABELS: Record<ReviewAspect, string> = {
+  Battery: 'Pin',
+  Camera: 'Camera',
+  Performance: 'Hiệu năng',
+  Display: 'Màn hình',
+  Design: 'Thiết kế',
+  Packaging: 'Đóng gói',
+  Price: 'Giá',
+  Shop_Service: 'Dịch vụ',
+  Shipping: 'Vận chuyển',
+  General: 'Tổng quan',
+  Others: 'Khác',
+};
+
+/** Sentiment scores breakdown for a single aspect. */
+export interface AspectScores {
+  positive: number;
+  negative: number;
+  neutral: number;
+}
+
+/** AI sentiment result for a single detected aspect. */
+export interface AspectResult {
+  aspect: string;
   sentiment: ReviewSentiment;
-  /** Confidence score for the sentiment prediction (0–1) */
-  sentimentScore: number;
-  /** Overall quality score of the review content (0–1) */
-  qualityScore: number;
-  /** Detected issue flags, e.g. "spam", "low_quality", "inappropriate" */
-  flags: string[];
-  /** Short AI-generated summary of the review */
-  summary: string;
+  confidence: number;
+  scores: AspectScores;
+}
+
+/** Full AI analysis result with per-aspect sentiments. */
+export interface ReviewAnalysisResult {
+  aspects: AspectResult[];
+  overallSentiment: ReviewSentiment;
+  overallConfidence: number;
   /** ISO date string of when the analysis was performed */
   analyzedAt: string;
 }
 
-export type ReviewAnalysisStatus = 'none' | 'pending' | 'completed';
+export type ReviewAnalysisStatus = 'none' | 'pending' | 'completed' | 'failed';
 
 export interface Review {
   id: string;
@@ -24,7 +65,7 @@ export interface Review {
   rating: number;
   comment: string;
   images?: string[];
-  /** Lifecycle state of AI analysis: none → pending → completed */
+  /** Lifecycle state of AI analysis: none → pending → completed | failed */
   analysisStatus: ReviewAnalysisStatus;
   /** Null until AI analysis has been performed */
   analysisResult: ReviewAnalysisResult | null;
