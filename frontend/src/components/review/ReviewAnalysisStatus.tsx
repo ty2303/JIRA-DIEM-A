@@ -1,90 +1,125 @@
-import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 
 import type {
-  ReviewAnalysisStatus as AnalysisStatus,
-  ReviewAnalysisResult,
-  ReviewSentiment,
-} from '@/types/review';
+	ReviewAnalysisStatus as AnalysisStatus,
+	AspectResult,
+	ReviewAnalysisResult,
+	ReviewSentiment,
+} from "@/types/review";
+import { ASPECT_LABELS, type ReviewAspect } from "@/types/review";
 
 interface ReviewAnalysisStatusProps {
-  status: AnalysisStatus;
-  result: ReviewAnalysisResult | null;
+	status: AnalysisStatus;
+	result: ReviewAnalysisResult | null;
 }
 
-const sentimentLabels: Record<
-  ReviewSentiment,
-  { label: string; color: string }
+const sentimentConfig: Record<
+	ReviewSentiment,
+	{ label: string; color: string; bgColor: string; dotColor: string }
 > = {
-  positive: { label: 'Tích cực', color: 'text-emerald-600' },
-  negative: { label: 'Tiêu cực', color: 'text-red-600' },
-  neutral: { label: 'Trung lập', color: 'text-amber-600' },
+	positive: {
+		label: "Tích cực",
+		color: "text-emerald-700",
+		bgColor: "bg-emerald-50",
+		dotColor: "bg-emerald-500",
+	},
+	negative: {
+		label: "Tiêu cực",
+		color: "text-red-700",
+		bgColor: "bg-red-50",
+		dotColor: "bg-red-500",
+	},
+	neutral: {
+		label: "Trung lập",
+		color: "text-amber-700",
+		bgColor: "bg-amber-50",
+		dotColor: "bg-amber-500",
+	},
 };
 
+function getAspectLabel(aspect: string): string {
+	return ASPECT_LABELS[aspect as ReviewAspect] ?? aspect;
+}
+
+function AspectBadge({ aspect }: { aspect: AspectResult }) {
+	const config = sentimentConfig[aspect.sentiment] ?? sentimentConfig.neutral;
+	const confidence = Math.round(aspect.confidence * 100);
+
+	return (
+		<span
+			className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${config.bgColor} ${config.color}`}
+			title={`${getAspectLabel(aspect.aspect)}: ${config.label} (${confidence}%)`}
+		>
+			<span className={`h-1.5 w-1.5 rounded-full ${config.dotColor}`} />
+			{getAspectLabel(aspect.aspect)}
+		</span>
+	);
+}
+
 export default function ReviewAnalysisStatus({
-  status,
-  result,
+	status,
+	result,
 }: ReviewAnalysisStatusProps) {
-  if (status === 'none') return null;
+	if (status === "none") return null;
 
-  if (status === 'pending') {
-    return (
-      <div className="mt-3 flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2">
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-        <span className="text-xs text-blue-700">
-          Hệ thống đang phân tích đánh giá...
-        </span>
-      </div>
-    );
-  }
+	if (status === "pending") {
+		return (
+			<div className="mt-3 flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2">
+				<Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+				<span className="text-xs text-blue-700">
+					Hệ thống đang phân tích đánh giá...
+				</span>
+			</div>
+		);
+	}
 
-  if (status === 'completed' && result) {
-    const sentiment =
-      sentimentLabels[result.sentiment] ?? sentimentLabels.neutral;
-    const hasFlags = result.flags.length > 0;
+	if (status === "failed") {
+		return (
+			<div className="mt-3 flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2">
+				<AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+				<span className="text-xs text-red-600">
+					Không thể phân tích đánh giá. Vui lòng thử lại sau.
+				</span>
+			</div>
+		);
+	}
 
-    return (
-      <div className="mt-3 rounded-xl border border-border bg-surface-alt px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          {hasFlags ? (
-            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-          ) : (
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          )}
-          <span className="text-xs text-text-secondary">
-            Phân tích AI:{' '}
-            <span className={`font-medium ${sentiment.color}`}>
-              {sentiment.label}
-            </span>
-            {result.qualityScore != null && (
-              <>
-                {' '}
-                &middot; Chất lượng: {Math.round(result.qualityScore * 100)}%
-              </>
-            )}
-          </span>
-        </div>
+	if (status === "completed" && result) {
+		const overallConfig =
+			sentimentConfig[result.overallSentiment] ?? sentimentConfig.neutral;
+		const confidencePct = Math.round(result.overallConfidence * 100);
 
-        {result.summary && (
-          <p className="mt-1.5 text-xs leading-5 text-text-muted">
-            {result.summary}
-          </p>
-        )}
+		// Separate aspects by sentiment for visual grouping
+		const nonGeneralAspects = result.aspects.filter(
+			(a) => a.aspect !== "General",
+		);
 
-        {hasFlags && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {result.flags.map((flag) => (
-              <span
-                key={flag}
-                className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700"
-              >
-                {flag}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
+		return (
+			<div className="mt-3 rounded-xl border border-border bg-surface-alt px-3 py-2.5">
+				{/* Header: overall sentiment */}
+				<div className="flex items-center gap-2">
+					<Sparkles className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
+					<span className="text-xs text-text-secondary">
+						Phân tích AI:{" "}
+						<span className={`font-semibold ${overallConfig.color}`}>
+							{overallConfig.label}
+						</span>
+						<span className="ml-1 text-text-muted">({confidencePct}%)</span>
+					</span>
+					<CheckCircle2 className="ml-auto h-3 w-3 text-emerald-400" />
+				</div>
 
-  return null;
+				{/* Aspect badges */}
+				{nonGeneralAspects.length > 0 && (
+					<div className="mt-2 flex flex-wrap gap-1.5">
+						{nonGeneralAspects.map((aspect) => (
+							<AspectBadge key={aspect.aspect} aspect={aspect} />
+						))}
+					</div>
+				)}
+			</div>
+		);
+	}
+
+	return null;
 }
