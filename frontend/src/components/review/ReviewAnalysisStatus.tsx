@@ -50,8 +50,10 @@ export default function ReviewAnalysisStatus({
           ) : (
             <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
           )}
-          <span className="text-xs text-text-secondary">
-            Phân tích AI:{' '}
+          <span className="flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
+            <span className="rounded-full bg-surface px-1.5 py-0.5 font-medium text-text-muted">
+              Phân tích AI
+            </span>
             <span className={`font-medium ${sentiment.color}`}>
               {sentiment.label}
             </span>
@@ -64,8 +66,12 @@ export default function ReviewAnalysisStatus({
           </span>
         </div>
 
+        <p className="mt-1 text-[11px] text-text-muted">
+          Đã phân tích {new Date(result.analyzedAt).toLocaleDateString('vi-VN')}
+        </p>
+
         {result.summary && (
-          <p className="mt-1.5 text-xs leading-5 text-text-muted">
+          <p className="mt-2 border-l-2 border-border pl-3 text-xs leading-5 text-text-secondary">
             {result.summary}
           </p>
         )}
