@@ -9,12 +9,10 @@ import {
 	uploadReviewImage,
 } from "../lib/reviewImageUpload.js";
 import { requireAuth } from "../middleware/auth.js";
+import { AnalysisLog } from "../models/AnalysisLog.js";
 import { Product } from "../models/Product.js";
 import { Review } from "../models/Review.js";
-import {
-	analyzeSentiment,
-	VALID_ASPECTS,
-} from "../services/sentimentAnalysis.js";
+import { analyzeSentiment } from "../services/sentimentAnalysis.js";
 
 export const reviewsRouter = express.Router();
 
@@ -25,8 +23,8 @@ export const reviewsRouter = express.Router();
  * @param {string} reviewId - Review _id (or in-memory id)
  * @param {string} commentText - Review comment to analyze
  */
-function triggerSentimentAnalysis(reviewId, commentText) {
-	analyzeAndUpdateReview(reviewId, commentText).catch((error) => {
+function triggerSentimentAnalysis(reviewId, commentText, productId) {
+	analyzeAndUpdateReview(reviewId, commentText, productId).catch((error) => {
 		console.error(
 			`[SentimentAnalysis] Unhandled error for review ${reviewId}:`,
 			error.message,
@@ -35,22 +33,48 @@ function triggerSentimentAnalysis(reviewId, commentText) {
 }
 
 /**
- * Call the AI sentiment service and persist the result.
- * On success: saves new result, clears previousAnalysis.
- * On failure: marks as failed, restores previousAnalysis if available.
+ * Call the AI sentiment service, persist the result, and log the call.
+ * On success: saves new result, clears previousAnalysis, logs success.
+ * On failure: marks as failed, restores previousAnalysis if available, logs failure.
  *
  * @param {string} reviewId
  * @param {string} commentText
+ * @param {string} [productId]
  */
-async function analyzeAndUpdateReview(reviewId, commentText) {
+async function analyzeAndUpdateReview(reviewId, commentText, productId) {
+	const startTime = Date.now();
+
 	try {
 		const result = await analyzeSentiment(commentText);
+		const durationMs = Date.now() - startTime;
 
 		if (isDatabaseReady()) {
 			await Review.findByIdAndUpdate(reviewId, {
 				analysisStatus: "completed",
 				analysisResult: result,
 				previousAnalysis: null,
+			});
+
+			// Audit log: record successful AI call
+			await AnalysisLog.create({
+				_id: crypto.randomUUID(),
+				reviewId,
+				productId: productId || null,
+				inputText: commentText,
+				status: "success",
+				result,
+				error: { message: null, code: null },
+				durationMs,
+				modelVersion: result.modelVersion || null,
+				promptVersion: result.promptVersion || null,
+				apiUrl: process.env.AI_SENTIMENT_URL || null,
+				attemptCount: 1,
+				createdAt: new Date(),
+			}).catch((logErr) => {
+				console.error(
+					`[AnalysisLog] Failed to log success for review ${reviewId}:`,
+					logErr.message,
+				);
 			});
 		} else {
 			const memReview = db.reviews.find((r) => r.id === reviewId);
@@ -59,8 +83,27 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 				memReview.analysisResult = result;
 				memReview.previousAnalysis = null;
 			}
+
+			// In-memory audit log
+			if (!db.analysisLogs) db.analysisLogs = [];
+			db.analysisLogs.push({
+				id: crypto.randomUUID(),
+				reviewId,
+				productId: productId || null,
+				inputText: commentText,
+				status: "success",
+				result,
+				error: null,
+				durationMs,
+				modelVersion: result.modelVersion || null,
+				promptVersion: result.promptVersion || null,
+				apiUrl: process.env.AI_SENTIMENT_URL || null,
+				attemptCount: 1,
+				createdAt: new Date().toISOString(),
+			});
 		}
 	} catch (error) {
+		const durationMs = Date.now() - startTime;
 		console.error(
 			`[SentimentAnalysis] Failed for review ${reviewId}: [${error.code ?? "UNKNOWN"}] ${error.message}`,
 		);
@@ -82,6 +125,31 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 					dbErr.message,
 				);
 			});
+
+			// Audit log: record failed AI call
+			await AnalysisLog.create({
+				_id: crypto.randomUUID(),
+				reviewId,
+				productId: productId || null,
+				inputText: commentText,
+				status: "failed",
+				result: null,
+				error: {
+					message: error.message || "Unknown error",
+					code: error.code || "UNKNOWN",
+				},
+				durationMs,
+				modelVersion: null,
+				promptVersion: null,
+				apiUrl: process.env.AI_SENTIMENT_URL || null,
+				attemptCount: 1,
+				createdAt: new Date(),
+			}).catch((logErr) => {
+				console.error(
+					`[AnalysisLog] Failed to log failure for review ${reviewId}:`,
+					logErr.message,
+				);
+			});
 		} else {
 			const memReview = db.reviews.find((r) => r.id === reviewId);
 			if (memReview) {
@@ -92,6 +160,27 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 					memReview.previousAnalysis = null;
 				}
 			}
+
+			// In-memory audit log
+			if (!db.analysisLogs) db.analysisLogs = [];
+			db.analysisLogs.push({
+				id: crypto.randomUUID(),
+				reviewId,
+				productId: productId || null,
+				inputText: commentText,
+				status: "failed",
+				result: null,
+				error: {
+					message: error.message || "Unknown error",
+					code: error.code || "UNKNOWN",
+				},
+				durationMs,
+				modelVersion: null,
+				promptVersion: null,
+				apiUrl: process.env.AI_SENTIMENT_URL || null,
+				attemptCount: 1,
+				createdAt: new Date().toISOString(),
+			});
 		}
 	}
 }
@@ -172,7 +261,7 @@ export async function createReview(req, res, options = {}) {
 		syncMemoryProductRating(payload.productId);
 
 		// Fire-and-forget: AI analysis runs in background
-		triggerSentimentAnalysis(reviewId, payload.comment);
+		triggerSentimentAnalysis(reviewId, payload.comment, payload.productId);
 
 		return res
 			.status(201)
@@ -215,7 +304,7 @@ export async function createReview(req, res, options = {}) {
 	await syncProductRating(payload.productId);
 
 	// Fire-and-forget: AI analysis runs in background
-	triggerSentimentAnalysis(review._id, payload.comment);
+	triggerSentimentAnalysis(review._id, payload.comment, payload.productId);
 
 	res
 		.status(201)
@@ -265,7 +354,7 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
 			review.analysisResult = null;
 
 			// Fire-and-forget: re-analyze on content change
-			triggerSentimentAnalysis(review.id, payload.comment);
+			triggerSentimentAnalysis(review.id, payload.comment, payload.productId);
 		}
 
 		syncMemoryProductRating(payload.productId);
@@ -316,7 +405,7 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
 
 	// Fire-and-forget: re-analyze on content change
 	if (contentChanged) {
-		triggerSentimentAnalysis(review._id, payload.comment);
+		triggerSentimentAnalysis(review._id, payload.comment, payload.productId);
 	}
 
 	return res.json(
@@ -394,32 +483,107 @@ reviewsRouter.get(
 		const productId = String(req.params.productId ?? "").trim();
 
 		if (!productId) {
-			return res.status(400).json(fail("productId is required", 400));
+			return res.status(400).json(fail("Thieu productId", 400));
 		}
 
-		if (!isDatabaseReady()) {
-			// In-memory aggregation
-			const reviews = db.reviews.filter(
-				(r) =>
-					r.productId === productId &&
-					r.analysisStatus === "completed" &&
-					r.analysisResult,
+		try {
+			if (!isDatabaseReady()) {
+				// In-memory aggregation
+				const allReviews = db.reviews.filter((r) => r.productId === productId);
+				const analyzedReviews = allReviews.filter(
+					(r) => r.analysisStatus === "completed" && r.analysisResult,
+				);
+
+				return res.json(
+					ok(buildAnalysisSummary(analyzedReviews, productId, allReviews.length)),
+				);
+			}
+
+			// MongoDB: get total count + analyzed reviews in parallel
+			const [totalReviews, reviews] = await Promise.all([
+				Review.countDocuments({ productId }),
+				Review.find({
+					productId,
+					analysisStatus: "completed",
+					analysisResult: { $ne: null },
+				})
+					.select("analysisResult")
+					.lean(),
+			]);
+
+			return res.json(
+				ok(buildAnalysisSummary(reviews, productId, totalReviews)),
 			);
-
-			return res.json(ok(buildAnalysisSummary(reviews, productId)));
+		} catch (error) {
+			console.error(
+				`[AnalysisSummary] Error for product ${productId}:`,
+				error.message,
+			);
+			return res.status(500).json(fail("Loi khi lay tong hop phan tich", 500));
 		}
-
-		// MongoDB aggregation
-		const reviews = await Review.find({
-			productId,
-			analysisStatus: "completed",
-			analysisResult: { $ne: null },
-		})
-			.lean();
-
-		return res.json(ok(buildAnalysisSummary(reviews, productId)));
 	},
 );
+/**
+ * GET /api/reviews/analysis-logs
+ *
+ * Returns AI analysis call audit trail.
+ * Supports filtering by reviewId, productId, status.
+ * Admin-only endpoint.
+ */
+reviewsRouter.get("/analysis-logs", requireAuth, async (req, res) => {
+	const { reviewId, productId, status, limit: limitStr } = req.query;
+	const limit = Math.min(Number(limitStr) || 50, 200);
+
+	try {
+		if (!isDatabaseReady()) {
+			let logs = db.analysisLogs || [];
+
+			if (reviewId) logs = logs.filter((l) => l.reviewId === reviewId);
+			if (productId) logs = logs.filter((l) => l.productId === productId);
+			if (status) logs = logs.filter((l) => l.status === status);
+
+			const sorted = logs
+				.slice()
+				.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+				.slice(0, limit);
+
+			return res.json(ok(sorted));
+		}
+
+		const filter = {};
+		if (reviewId) filter.reviewId = String(reviewId);
+		if (productId) filter.productId = String(productId);
+		if (status) filter.status = String(status);
+
+		const logs = await AnalysisLog.find(filter)
+			.sort({ createdAt: -1 })
+			.limit(limit)
+			.lean();
+
+		return res.json(
+			ok(
+				logs.map((log) => ({
+					id: log._id,
+					reviewId: log.reviewId,
+					productId: log.productId,
+					inputText: log.inputText,
+					status: log.status,
+					result: log.result,
+					error: log.error,
+					durationMs: log.durationMs,
+					modelVersion: log.modelVersion,
+					promptVersion: log.promptVersion,
+					apiUrl: log.apiUrl,
+					attemptCount: log.attemptCount,
+					createdAt: log.createdAt,
+				})),
+			),
+		);
+	} catch (error) {
+		console.error("[AnalysisLogs] Error:", error.message);
+		return res.status(500).json(fail("Loi khi lay nhat ky phan tich", 500));
+	}
+});
 
 async function syncProductRating(productId) {
 	const stats = await Review.aggregate([
@@ -516,17 +680,18 @@ function isHttpUrl(value) {
  *
  * Returns per-aspect sentiment averages and overall sentiment distribution.
  *
- * @param {Array} reviews - Reviews with analysisResult
+ * @param {Array} reviews - Reviews with analysisResult (already filtered to completed)
  * @param {string} productId
+ * @param {number} totalReviewCount - Total reviews for this product (including unanalyzed)
  * @returns {Object} Analysis summary
  */
-function buildAnalysisSummary(reviews, productId) {
+function buildAnalysisSummary(reviews, productId, totalReviewCount) {
 	const totalAnalyzed = reviews.length;
 
 	if (totalAnalyzed === 0) {
 		return {
 			productId,
-			totalReviews: 0,
+			totalReviews: totalReviewCount ?? 0,
 			totalAnalyzed: 0,
 			sentimentDistribution: { positive: 0, negative: 0, neutral: 0 },
 			aspectSummary: [],
@@ -602,7 +767,7 @@ function buildAnalysisSummary(reviews, productId) {
 
 	return {
 		productId,
-		totalReviews: totalAnalyzed,
+		totalReviews: totalReviewCount ?? totalAnalyzed,
 		totalAnalyzed,
 		sentimentDistribution: sentimentDist,
 		aspectSummary,

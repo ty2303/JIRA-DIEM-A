@@ -3302,3 +3302,357 @@ describe("Task 23 - AI analysis processing and storage", () => {
     });
   });
 });
+
+// ─── Task 23 - AI Analysis Audit Trail ────────────────────────────────────────
+
+describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
+  /** @type {ReturnType<typeof structuredClone>} */
+  let reviewsSnapshot;
+  let productsSnapshot;
+
+  beforeEach(() => {
+    reviewsSnapshot = structuredClone(db.reviews);
+    productsSnapshot = structuredClone(db.products);
+    // Reset analysis state
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+      r.previousAnalysis = null;
+    });
+    // Clear any previous logs
+    db.analysisLogs = [];
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    db.reviews = reviewsSnapshot;
+    db.products = productsSnapshot;
+    db.analysisLogs = [];
+  });
+
+  test("successful AI analysis creates audit log entry with correct fields", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Camera tuyet voi, chup anh net",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis to complete
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Verify audit log was created
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "success");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Camera tuyet voi, chup anh net");
+      assert.ok(log.result, "result should be present");
+      assert.ok(log.result.aspects.length > 0, "result should have aspects");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+      assert.ok(log.durationMs >= 0, "durationMs should be non-negative");
+      assert.ok(log.id, "log should have an id");
+      assert.ok(log.createdAt, "log should have createdAt");
+      assert.equal(log.attemptCount, 1);
+      assert.strictEqual(log.error, null);
+    });
+  });
+
+  test("failed AI analysis creates audit log entry with error details", async () => {
+    // Mock fetch to fail
+    mockFetchSequence([
+      { error: new Error("AI service unavailable") },
+      { error: new Error("AI service unavailable") }, // retry
+    ]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 3,
+          comment: "Test failure audit logging",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis + retries to complete
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "failed");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Test failure audit logging");
+      assert.strictEqual(log.result, null);
+      assert.ok(log.error, "error should be present");
+      assert.ok(log.error.message, "error.message should be present");
+      assert.ok(log.error.code, "error.code should be present");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by reviewId", async () => {
+    // Seed audit logs
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good product",
+        status: "success",
+        result: { overallSentiment: "positive" },
+        error: null,
+        durationMs: 150,
+        modelVersion: "absa-v1",
+        promptVersion: "1.0",
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad product",
+        status: "failed",
+        result: null,
+        error: { message: "Timeout", code: "TIMEOUT" },
+        durationMs: 15000,
+        modelVersion: null,
+        promptVersion: null,
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?reviewId=review-1`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].reviewId, "review-1");
+      assert.equal(body.data[0].status, "success");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by status", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 100,
+        createdAt: "2026-03-31T01:00:00.000Z",
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad",
+        status: "failed",
+        result: null,
+        error: { message: "Error", code: "TIMEOUT" },
+        durationMs: 15000,
+        createdAt: "2026-03-31T02:00:00.000Z",
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?status=failed`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].status, "failed");
+      assert.equal(body.data[0].reviewId, "review-2");
+    });
+  });
+
+  test("GET /analysis-logs respects limit parameter", async () => {
+    // Seed 5 logs
+    db.analysisLogs = Array.from({ length: 5 }, (_, i) => ({
+      id: `log-${i}`,
+      reviewId: "review-1",
+      productId: "prod-iphone-15",
+      inputText: `Comment ${i}`,
+      status: "success",
+      result: {},
+      error: null,
+      durationMs: 100 + i,
+      createdAt: new Date(Date.now() - i * 60000).toISOString(),
+    }));
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?limit=2`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 2);
+    });
+  });
+
+  test("GET /analysis-logs requires authentication", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+      );
+
+      assert.equal(res.status, 401);
+    });
+  });
+
+  test("GET /analysis-logs returns empty array when no logs exist", async () => {
+    db.analysisLogs = [];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.ok(Array.isArray(body.data));
+      assert.equal(body.data.length, 0);
+    });
+  });
+
+  test("GET /analysis-logs filters by productId", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "iPhone review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 120,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Samsung review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 130,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?productId=prod-iphone-15`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].productId, "prod-iphone-15");
+    });
+  });
+
+  test("audit log records modelVersion and promptVersion on success", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "General",
+          sentiment: "positive",
+          confidence: 0.85,
+          scores: { positive: 0.85, negative: 0.1, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 4,
+          comment: "San pham tot, dang mua",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for analysis
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const log = db.analysisLogs.find((l) => l.status === "success");
+      assert.ok(log, "Expected a success log entry");
+      assert.equal(log.modelVersion, "absa-v1");
+      assert.equal(log.promptVersion, "1.0");
+    });
+  });
+});

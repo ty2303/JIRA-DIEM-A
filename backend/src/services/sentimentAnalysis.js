@@ -78,6 +78,8 @@ export const ASPECT_LABELS = {
  * @property {'positive'|'negative'|'neutral'} overallSentiment
  * @property {number} overallConfidence
  * @property {string} analyzedAt
+ * @property {string|null} modelVersion
+ * @property {string|null} promptVersion
  */
 
 /**
