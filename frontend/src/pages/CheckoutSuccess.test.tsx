@@ -105,7 +105,8 @@ async function renderCheckoutSuccess(options?: {
     currentOrder: options?.order ?? null,
     isLoading: false,
     fetchOrderById:
-      options?.fetchOrderById ?? vi.fn().mockResolvedValue(options?.order ?? null),
+      options?.fetchOrderById ??
+      vi.fn().mockResolvedValue(options?.order ?? null),
   });
 
   useCartStore.setState({
@@ -138,7 +139,9 @@ describe('CheckoutSuccess page', () => {
     expect(
       await screen.findByRole('heading', { name: 'Đặt hàng thành công!' }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('Thanh toán khi nhận hàng').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('Thanh toán khi nhận hàng').length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText('25.000.000₫').length).toBeGreaterThan(0);
     expect(
       screen.queryByRole('link', { name: 'Thử lại thanh toán' }),
