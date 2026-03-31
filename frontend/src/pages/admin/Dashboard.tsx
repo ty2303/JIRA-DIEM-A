@@ -47,6 +47,7 @@ import type { Order, OrderStatus } from '@/types/order';
 import { ORDER_STATUS_COLOR, ORDER_STATUS_LABEL } from '@/types/order';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useToastStore } from '@/store/useToastStore';
+import { clearClientSession } from '@/utils/clearClientSession';
 
 interface UserItem {
   id: string;
@@ -283,7 +284,7 @@ export function Component() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
 
-  const { user, logout } = useAuthStore();
+  const { user } = useAuthStore();
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
 
@@ -351,7 +352,7 @@ export function Component() {
   }, []);
 
   const handleLogout = () => {
-    logout();
+    clearClientSession();
     navigate('/login');
   };
 

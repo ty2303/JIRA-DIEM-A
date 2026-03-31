@@ -32,3 +32,32 @@ export function calculateOrderPricing(items, options = {}) {
 		total,
 	};
 }
+
+export function calculateOrderPricingFromProducts(
+	items,
+	productsById,
+	options = {},
+) {
+	const subtotal = Array.isArray(items)
+		? items.reduce((sum, item) => {
+				const product = productsById.get(item?.productId);
+				const price = Number(product?.price) || 0;
+				const quantity = Number(item?.quantity) || 0;
+				return sum + price * quantity;
+			}, 0)
+		: 0;
+	const shippingFee =
+		subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : DEFAULT_SHIPPING_FEE;
+	const requestedDiscount = toSafeMoney(
+		options.discount ?? options.discountAmount,
+	);
+	const discount = Math.min(requestedDiscount, subtotal + shippingFee);
+	const total = Math.max(0, subtotal + shippingFee - discount);
+
+	return {
+		subtotal,
+		shippingFee,
+		discount,
+		total,
+	};
+}

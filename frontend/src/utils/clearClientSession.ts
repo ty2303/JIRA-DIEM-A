@@ -6,6 +6,6 @@ import { useWishlistStore } from '@/store/useWishlistStore';
 export function clearClientSession() {
   useOrderStore.getState().reset();
   useWishlistStore.getState().reset({ preserveGuest: true });
-  useCartStore.getState().clearLocal();
+  useCartStore.getState().reset({ preserveGuest: true });
   useAuthStore.getState().logout();
 }

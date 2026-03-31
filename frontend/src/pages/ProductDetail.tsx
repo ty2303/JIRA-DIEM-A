@@ -382,7 +382,9 @@ export function Component() {
                 <motion.button
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.99 }}
-                  onClick={() => addToCart(product)}
+                  onClick={() => {
+                    void addToCart(product);
+                  }}
                   className="btn-primary flex flex-1 items-center justify-center gap-2 py-4"
                 >
                   <ShoppingCart className="h-5 w-5" />
@@ -391,9 +393,11 @@ export function Component() {
                 <motion.button
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.99 }}
-                  onClick={() => {
-                    addToCart(product);
-                    navigate('/checkout');
+                  onClick={async () => {
+                    const added = await addToCart(product);
+                    if (added) {
+                      navigate('/checkout');
+                    }
                   }}
                   className="btn-outline px-6 py-4"
                 >

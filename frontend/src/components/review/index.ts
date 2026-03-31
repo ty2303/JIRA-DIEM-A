@@ -1,3 +1,4 @@
+export { default as AISentimentSummary } from './AISentimentSummary';
 export { default as ProductReviewCard } from './ProductReviewCard';
 export { default as ProductReviewForm } from './ProductReviewForm';
 export { default as ProductReviewSection } from './ProductReviewSection';

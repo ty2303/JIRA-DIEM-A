@@ -55,6 +55,22 @@ export interface ReviewAnalysisResult {
   analyzedAt: string;
 }
 
+export interface ReviewAspectSummaryRow {
+  aspect: string;
+  mentionCount: number;
+  sentimentCounts: AspectScores;
+  avgConfidence: number;
+  avgScores: AspectScores;
+}
+
+export interface ProductReviewAnalysisSummary {
+  productId: string;
+  totalReviews: number;
+  totalAnalyzed: number;
+  sentimentDistribution: AspectScores;
+  aspectSummary: ReviewAspectSummaryRow[];
+}
+
 export type ReviewAnalysisStatus = 'none' | 'pending' | 'completed' | 'failed';
 
 export interface Review {

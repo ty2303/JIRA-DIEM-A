@@ -8,7 +8,7 @@ import {
 	isUploadableReviewImageData,
 	uploadReviewImage,
 } from "../lib/reviewImageUpload.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { AnalysisLog } from "../models/AnalysisLog.js";
 import { Product } from "../models/Product.js";
 import { Review } from "../models/Review.js";
@@ -530,7 +530,7 @@ reviewsRouter.get(
  * Supports filtering by reviewId, productId, status.
  * Admin-only endpoint.
  */
-reviewsRouter.get("/analysis-logs", requireAuth, async (req, res) => {
+reviewsRouter.get("/analysis-logs", requireAdmin, async (req, res) => {
 	const { reviewId, productId, status, limit: limitStr } = req.query;
 	const limit = Math.min(Number(limitStr) || 50, 200);
 
