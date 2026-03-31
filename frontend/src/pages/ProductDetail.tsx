@@ -27,12 +27,7 @@ import { useCartStore } from '@/store/useCartStore';
 import { useWishlistStore } from '@/store/useWishlistStore';
 import type { Product } from '@/types/product';
 import type { Review } from '@/types/review';
-function getAverageRating(items: Review[]) {
-  if (items.length === 0) return 0;
-  const total = items.reduce((sum, review) => sum + review.rating, 0);
-  return Number((total / items.length).toFixed(1));
-}
-
+import { getAverageRating } from '@/utils/rating';
 
 export function Component() {
   const { id } = useParams<{ id: string }>();

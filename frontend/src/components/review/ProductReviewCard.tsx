@@ -11,7 +11,7 @@ interface ProductReviewCardProps {
 	/** Whether the current user owns this review */
 	isOwner: boolean;
 	onEdit?: (review: Review) => void;
-	onDelete?: (reviewId: string) => void;
+	onDelete?: (reviewId: string) => void | Promise<void>;
 }
 
 export default function ProductReviewCard({
@@ -63,7 +63,7 @@ export default function ProductReviewCard({
 							{onDelete && (
 								<button
 									type="button"
-									onClick={() => onDelete(review.id)}
+								onClick={() => void onDelete(review.id)}
 									className="cursor-pointer rounded-lg p-1.5 text-text-muted transition-colors hover:bg-red-50 hover:text-red-500"
 									aria-label="Xóa đánh giá"
 								>

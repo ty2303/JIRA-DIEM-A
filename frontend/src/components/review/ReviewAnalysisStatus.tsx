@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type {
 	ReviewAnalysisStatus as AnalysisStatus,
 	ReviewAnalysisResult,
+	ReviewSentiment,
 } from "@/types/review";
 
 interface ReviewAnalysisStatusProps {
@@ -10,7 +11,10 @@ interface ReviewAnalysisStatusProps {
 	result: ReviewAnalysisResult | null;
 }
 
-const sentimentLabels: Record<string, { label: string; color: string }> = {
+const sentimentLabels: Record<
+	ReviewSentiment,
+	{ label: string; color: string }
+> = {
 	positive: { label: "Tích cực", color: "text-emerald-600" },
 	negative: { label: "Tiêu cực", color: "text-red-600" },
 	neutral: { label: "Trung lập", color: "text-amber-600" },

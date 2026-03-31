@@ -5,18 +5,12 @@ import apiClient from "@/api/client";
 import { ENDPOINTS } from "@/api/endpoints";
 import { useAuthStore } from "@/store/useAuthStore";
 import type { Review } from "@/types/review";
+import { getAverageRating } from "@/utils/rating";
 
 import ProductReviewCard from "./ProductReviewCard";
 import ProductReviewForm from "./ProductReviewForm";
 import ReviewLoginCTA from "./ReviewLoginCTA";
 import ReviewStarRating from "./ReviewStarRating";
-
-/* ---------- helpers ---------- */
-function getAverageRating(items: Review[]) {
-	if (items.length === 0) return 0;
-	const total = items.reduce((sum, r) => sum + r.rating, 0);
-	return Number((total / items.length).toFixed(1));
-}
 
 /* ---------- props ---------- */
 interface ProductReviewSectionProps {
@@ -32,7 +26,9 @@ export default function ProductReviewSection({
 	averageRating,
 	onReviewsChange,
 }: ProductReviewSectionProps) {
-	const { isLoggedIn, isAdmin, user } = useAuthStore();
+	const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+	const isAdmin = useAuthStore((s) => s.isAdmin);
+	const user = useAuthStore((s) => s.user);
 
 	const [editingReview, setEditingReview] = useState<Review | null>(null);
 	const [deleteError, setDeleteError] = useState("");
@@ -80,6 +76,11 @@ export default function ProductReviewSection({
 
 	const handleDelete = useCallback(
 		async (reviewId: string) => {
+			const confirmed = window.confirm(
+				"Bạn có chắc muốn xóa đánh giá này? Hành động này không thể hoàn tác.",
+			);
+			if (!confirmed) return;
+
 			setDeleteError("");
 			try {
 				await apiClient.delete(ENDPOINTS.REVIEWS.BY_ID(reviewId));
@@ -215,7 +216,7 @@ export default function ProductReviewSection({
 								review={review}
 								isOwner={review.userId === user?.id}
 								onEdit={handleEdit}
-								onDelete={(id) => void handleDelete(id)}
+							onDelete={handleDelete}
 							/>
 						))}
 					</div>

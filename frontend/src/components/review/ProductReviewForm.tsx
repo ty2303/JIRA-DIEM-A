@@ -1,6 +1,6 @@
 import { CheckCircle2, Loader2, Send } from "lucide-react";
 import { motion } from "motion/react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import apiClient from "@/api/client";
 import { ENDPOINTS } from "@/api/endpoints";
@@ -80,8 +80,12 @@ export default function ProductReviewForm({
 	const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
 	/* --- refs --- */
-	const formRef = useRef<HTMLFormElement>(null);
 	const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+	/* --- cleanup timer on unmount --- */
+	useEffect(() => {
+		return () => clearTimeout(successTimerRef.current);
+	}, []);
 
 	/* --- image handling (preserved on submit failure) --- */
 	const handleImageAdd = useCallback(async (file: File) => {
@@ -191,7 +195,6 @@ export default function ProductReviewForm({
 
 	return (
 		<motion.form
-			ref={formRef}
 			initial={{ opacity: 0, y: 10 }}
 			animate={{ opacity: 1, y: 0 }}
 			onSubmit={(event) => void handleSubmit(event)}
