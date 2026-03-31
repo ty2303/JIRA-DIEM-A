@@ -89,10 +89,33 @@ export default function ReviewAnalysisStatus({
 			sentimentConfig[result.overallSentiment] ?? sentimentConfig.neutral;
 		const confidencePct = Math.round(result.overallConfidence * 100);
 
-		// Separate aspects by sentiment for visual grouping
+		// Group non-General aspects by sentiment
 		const nonGeneralAspects = result.aspects.filter(
 			(a) => a.aspect !== "General",
 		);
+		const negativeAspects = nonGeneralAspects.filter(
+			(a) => a.sentiment === "negative",
+		);
+		const positiveAspects = nonGeneralAspects.filter(
+			(a) => a.sentiment === "positive",
+		);
+		const neutralAspects = nonGeneralAspects.filter(
+			(a) => a.sentiment === "neutral",
+		);
+
+		// Order groups: matching overall sentiment first
+		const groups = [
+			{ sentiment: "negative" as const, aspects: negativeAspects, label: "Tiêu cực" },
+			{ sentiment: "positive" as const, aspects: positiveAspects, label: "Tích cực" },
+			{ sentiment: "neutral" as const, aspects: neutralAspects, label: "Trung lập" },
+		].filter((g) => g.aspects.length > 0);
+
+		// Put overall-matching group first
+		groups.sort((a, b) => {
+			if (a.sentiment === result.overallSentiment) return -1;
+			if (b.sentiment === result.overallSentiment) return 1;
+			return 0;
+		});
 
 		return (
 			<div className="mt-3 rounded-xl border border-border bg-surface-alt px-3 py-2.5">
@@ -109,12 +132,24 @@ export default function ReviewAnalysisStatus({
 					<CheckCircle2 className="ml-auto h-3 w-3 text-emerald-400" />
 				</div>
 
-				{/* Aspect badges */}
-				{nonGeneralAspects.length > 0 && (
-					<div className="mt-2 flex flex-wrap gap-1.5">
-						{nonGeneralAspects.map((aspect) => (
-							<AspectBadge key={aspect.aspect} aspect={aspect} />
-						))}
+				{/* Grouped aspect badges by sentiment */}
+				{groups.length > 0 && (
+					<div className="mt-2 space-y-1.5">
+						{groups.map((group) => {
+							const groupConfig = sentimentConfig[group.sentiment];
+							return (
+								<div key={group.sentiment} className="flex flex-wrap items-center gap-1.5">
+									<span
+										className={`text-[11px] font-medium ${groupConfig.color}`}
+									>
+										{group.label}:
+									</span>
+									{group.aspects.map((aspect) => (
+										<AspectBadge key={aspect.aspect} aspect={aspect} />
+									))}
+								</div>
+							);
+						})}
 					</div>
 				)}
 			</div>

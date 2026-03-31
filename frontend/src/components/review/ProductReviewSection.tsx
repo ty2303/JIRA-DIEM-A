@@ -1,5 +1,5 @@
 import { Pencil, Star } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
@@ -32,6 +32,53 @@ export default function ProductReviewSection({
 
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [deleteError, setDeleteError] = useState('');
+
+  /* --- poll for pending analysis results --- */
+  const hasPending = useMemo(
+    () => reviews.some((r) => r.analysisStatus === 'pending'),
+    [reviews],
+  );
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!hasPending) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const { data } = await apiClient.get(ENDPOINTS.REVIEWS.BASE, {
+          params: { productId },
+        });
+        const freshReviews: Review[] = data?.data ?? data ?? [];
+        const stillPending = freshReviews.some(
+          (r) => r.analysisStatus === 'pending',
+        );
+        // Only update if analysis status actually changed
+        const statusChanged = freshReviews.some((fresh) => {
+          const old = reviews.find((r) => r.id === fresh.id);
+          return old && old.analysisStatus !== fresh.analysisStatus;
+        });
+        if (statusChanged || !stillPending) {
+          const nextAverage = getAverageRating(freshReviews);
+          onReviewsChange(freshReviews, nextAverage);
+        }
+      } catch {
+        // Silently ignore poll errors
+      }
+    }, 3000);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [hasPending, productId, reviews, onReviewsChange]);
 
   /* --- derived --- */
   const myReview = useMemo(
