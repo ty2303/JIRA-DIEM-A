@@ -116,7 +116,6 @@ export function Component() {
     [product?.rating, reviews],
   );
 
-
   const specificationList = useMemo(
     () =>
       product?.specs
