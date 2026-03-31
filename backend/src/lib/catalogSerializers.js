@@ -76,6 +76,7 @@ export function serializeReview(review) {
     images: review.images ?? [],
     analysisStatus: review.analysisStatus ?? "none",
     analysisResult: review.analysisResult ?? null,
+    previousAnalysis: review.previousAnalysis ?? null,
     createdAt: toIso(review.createdAt),
     updatedAt: toIso(review.updatedAt),
   };

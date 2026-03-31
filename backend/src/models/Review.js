@@ -55,6 +55,14 @@ const analysisResultSchema = new mongoose.Schema(
 			type: Date,
 			required: true,
 		},
+		modelVersion: {
+			type: String,
+			default: null,
+		},
+		promptVersion: {
+			type: String,
+			default: null,
+		},
 	},
 	{ _id: false },
 );
@@ -117,6 +125,10 @@ const reviewSchema = new mongoose.Schema(
 			default: "none",
 		},
 		analysisResult: {
+			type: analysisResultSchema,
+			default: null,
+		},
+		previousAnalysis: {
 			type: analysisResultSchema,
 			default: null,
 		},

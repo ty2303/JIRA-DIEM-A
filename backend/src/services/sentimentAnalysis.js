@@ -18,6 +18,8 @@ function getConfig() {
 		url: process.env.AI_SENTIMENT_URL || DEFAULT_AI_SERVICE_URL,
 		timeoutMs: Number(process.env.AI_SENTIMENT_TIMEOUT_MS) || 15000,
 		maxRetries: Number(process.env.AI_SENTIMENT_MAX_RETRIES ?? 1),
+		modelVersion: process.env.AI_SENTIMENT_MODEL_VERSION || "absa-v1",
+		promptVersion: process.env.AI_SENTIMENT_PROMPT_VERSION || "1.0",
 	};
 }
 
@@ -76,6 +78,8 @@ export const ASPECT_LABELS = {
  * @property {'positive'|'negative'|'neutral'} overallSentiment
  * @property {number} overallConfidence
  * @property {string} analyzedAt
+ * @property {string|null} modelVersion
+ * @property {string|null} promptVersion
  */
 
 /**
@@ -167,7 +171,7 @@ async function callSentimentApi(text, config) {
 		}
 
 		const data = await response.json();
-		return parseApiResponse(data);
+		return parseApiResponse(data, config);
 	} catch (error) {
 		if (error instanceof SentimentAnalysisError) {
 			throw error;
@@ -195,16 +199,22 @@ async function callSentimentApi(text, config) {
  * Expected input:
  * { "results": [{ "aspect": "General", "sentiment": "positive", "confidence": 0.77, "scores": {...} }] }
  *
+ * Validates aspect names against VALID_ASPECTS. Unknown aspects are mapped to "Others".
+ * Missing scores are filled with zeros. Model/prompt versions are attached for tracking.
+ *
  * @param {unknown} data
+ * @param {{ modelVersion?: string, promptVersion?: string }} [config]
  * @returns {SentimentAnalysisResult}
  */
-function parseApiResponse(data) {
+function parseApiResponse(data, config = {}) {
 	if (!data || !Array.isArray(data.results) || data.results.length === 0) {
 		throw new SentimentAnalysisError(
 			"Invalid AI response: missing results array",
 			"INVALID_RESPONSE",
 		);
 	}
+
+	const validAspectSet = new Set(VALID_ASPECTS);
 
 	const aspects = data.results
 		.filter(
@@ -215,7 +225,7 @@ function parseApiResponse(data) {
 				typeof item.confidence === "number",
 		)
 		.map((item) => ({
-			aspect: item.aspect,
+			aspect: validAspectSet.has(item.aspect) ? item.aspect : "Others",
 			sentiment: normalizeSentiment(item.sentiment),
 			confidence: clamp(item.confidence, 0, 1),
 			scores: {
@@ -232,19 +242,24 @@ function parseApiResponse(data) {
 		);
 	}
 
+	// Deduplicate aspects — if mapping to "Others" created duplicates, merge by keeping highest confidence
+	const deduped = deduplicateAspects(aspects);
+
 	// Derive overall sentiment from "General" aspect if present, else highest confidence
-	const generalAspect = aspects.find((a) => a.aspect === "General");
+	const generalAspect = deduped.find((a) => a.aspect === "General");
 	const bestAspect =
 		generalAspect ||
-		aspects.reduce((best, curr) =>
+		deduped.reduce((best, curr) =>
 			curr.confidence > best.confidence ? curr : best,
 		);
 
 	return {
-		aspects,
+		aspects: deduped,
 		overallSentiment: bestAspect.sentiment,
 		overallConfidence: bestAspect.confidence,
 		analyzedAt: new Date().toISOString(),
+		modelVersion: config.modelVersion || null,
+		promptVersion: config.promptVersion || null,
 	};
 }
 
@@ -263,6 +278,24 @@ function normalizeSentiment(value) {
 		return normalized;
 	}
 	return "neutral";
+}
+
+/**
+ * Deduplicate aspects by name, keeping the entry with highest confidence.
+ * This handles cases where unknown aspects are mapped to "Others" and create duplicates.
+ *
+ * @param {AspectResult[]} aspects
+ * @returns {AspectResult[]}
+ */
+function deduplicateAspects(aspects) {
+	const map = new Map();
+	for (const aspect of aspects) {
+		const existing = map.get(aspect.aspect);
+		if (!existing || aspect.confidence > existing.confidence) {
+			map.set(aspect.aspect, aspect);
+		}
+	}
+	return Array.from(map.values());
 }
 
 /**

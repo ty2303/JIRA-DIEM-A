@@ -2914,3 +2914,745 @@ test("unknown route returns 404", async () => {
     assert.equal(res.status, 404);
   });
 });
+
+// =============================================================================
+// Task 23 — AI analysis processing and storage
+// =============================================================================
+
+describe("Task 23 - AI analysis processing and storage", () => {
+  /** @type {ReturnType<typeof structuredClone>} */
+  let reviewsSnapshot;
+  let productsSnapshot;
+
+  beforeEach(() => {
+    reviewsSnapshot = structuredClone(db.reviews);
+    productsSnapshot = structuredClone(db.products);
+    // Reset analysis state for consistent tests
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+      r.previousAnalysis = null;
+    });
+  });
+
+  afterEach(() => {
+    db.reviews = reviewsSnapshot;
+    db.products = productsSnapshot;
+  });
+
+  // --- Success path: aspect-based analysis stored correctly ---
+
+  test("stores aspect-based analysis result with modelVersion and promptVersion", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const analysisResult = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.92,
+          scores: { positive: 0.92, negative: 0.05, neutral: 0.03 },
+        },
+        {
+          aspect: "Battery",
+          sentiment: "negative",
+          confidence: 0.78,
+          scores: { positive: 0.1, negative: 0.78, neutral: 0.12 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.92,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = analysisResult;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisStatus, "completed");
+      assert.equal(found.analysisResult.overallSentiment, "positive");
+      assert.equal(found.analysisResult.overallConfidence, 0.92);
+      assert.equal(found.analysisResult.aspects.length, 2);
+      assert.equal(found.analysisResult.modelVersion, "absa-v1");
+      assert.equal(found.analysisResult.promptVersion, "1.0");
+
+      // Verify individual aspects
+      const camera = found.analysisResult.aspects.find(
+        (a) => a.aspect === "Camera",
+      );
+      assert.equal(camera.sentiment, "positive");
+      assert.equal(camera.confidence, 0.92);
+
+      const battery = found.analysisResult.aspects.find(
+        (a) => a.aspect === "Battery",
+      );
+      assert.equal(battery.sentiment, "negative");
+    });
+  });
+
+  // --- AI returns missing fields ---
+
+  test("handles analysis result with missing optional fields gracefully", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    // Simulate result with no modelVersion/promptVersion (null)
+    const analysisResult = {
+      aspects: [
+        {
+          aspect: "General",
+          sentiment: "neutral",
+          confidence: 0.6,
+          scores: { positive: 0.2, negative: 0.2, neutral: 0.6 },
+        },
+      ],
+      overallSentiment: "neutral",
+      overallConfidence: 0.6,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: null,
+      promptVersion: null,
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = analysisResult;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisResult.overallSentiment, "neutral");
+      assert.strictEqual(found.analysisResult.modelVersion, null);
+      assert.strictEqual(found.analysisResult.promptVersion, null);
+    });
+  });
+
+  // --- AI failure: analysisStatus = failed ---
+
+  test("failed analysis sets status to failed and keeps analysisResult null", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    review.analysisStatus = "failed";
+    review.analysisResult = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisStatus, "failed");
+      assert.strictEqual(found.analysisResult, null);
+    });
+  });
+
+  // --- Re-analysis on edit: previousAnalysis preserved ---
+
+  test("PUT /api/reviews/:id preserves old analysis in previousAnalysis when content changes", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const oldAnalysis = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.9,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = oldAnalysis;
+    review.previousAnalysis = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-1`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 4,
+            comment: "Updated comment triggers re-analysis",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+      // previousAnalysis should hold the old completed result
+      assert.ok(body.data.previousAnalysis);
+      assert.equal(body.data.previousAnalysis.overallSentiment, "positive");
+      assert.equal(body.data.previousAnalysis.aspects.length, 1);
+      assert.equal(body.data.previousAnalysis.modelVersion, "absa-v1");
+    });
+  });
+
+  test("PUT /api/reviews/:id does NOT set previousAnalysis when content unchanged", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const existingAnalysis = {
+      aspects: [
+        {
+          aspect: "General",
+          sentiment: "positive",
+          confidence: 0.85,
+          scores: { positive: 0.85, negative: 0.1, neutral: 0.05 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.85,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = existingAnalysis;
+    review.previousAnalysis = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-1`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: review.productId,
+            rating: review.rating,
+            comment: review.comment,
+            images: review.images,
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "completed");
+      assert.ok(body.data.analysisResult);
+      assert.strictEqual(body.data.previousAnalysis, null);
+    });
+  });
+
+  // --- Analysis summary aggregate endpoint ---
+
+  test("GET /api/reviews/product/:productId/analysis-summary returns empty summary for no reviews", async () => {
+    // Remove all reviews for this product
+    db.reviews = db.reviews.filter((r) => r.productId !== "prod-iphone-15");
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.productId, "prod-iphone-15");
+      assert.equal(body.data.totalAnalyzed, 0);
+      assert.deepStrictEqual(body.data.sentimentDistribution, {
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+      });
+      assert.deepStrictEqual(body.data.aspectSummary, []);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary aggregates completed reviews", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    review.analysisStatus = "completed";
+    review.analysisResult = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+        {
+          aspect: "Battery",
+          sentiment: "negative",
+          confidence: 0.8,
+          scores: { positive: 0.1, negative: 0.8, neutral: 0.1 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.9,
+      analyzedAt: new Date().toISOString(),
+    };
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.productId, "prod-iphone-15");
+      assert.equal(body.data.totalAnalyzed, 1);
+      assert.equal(body.data.sentimentDistribution.positive, 1);
+      assert.equal(body.data.sentimentDistribution.negative, 0);
+      assert.equal(body.data.aspectSummary.length, 2);
+
+      // Aspects sorted by mention count (both have 1, so order may vary)
+      const cameraAspect = body.data.aspectSummary.find(
+        (a) => a.aspect === "Camera",
+      );
+      assert.ok(cameraAspect);
+      assert.equal(cameraAspect.mentionCount, 1);
+      assert.equal(cameraAspect.sentimentCounts.positive, 1);
+      assert.equal(cameraAspect.avgConfidence, 0.9);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary ignores non-completed reviews", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    // Set to pending — should not be included in summary
+    review.analysisStatus = "pending";
+    review.analysisResult = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.totalAnalyzed, 0);
+      assert.deepStrictEqual(body.data.aspectSummary, []);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary returns 400 for missing productId", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/%20/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.ok(body.message);
+    });
+  });
+
+  // --- Status tracking: pending -> completed / failed ---
+
+  test("review transitions from none to pending on POST", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Task 23 test: status transitions correctly",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+      assert.strictEqual(body.data.previousAnalysis, null);
+    });
+  });
+});
+
+// ─── Task 23 - AI Analysis Audit Trail ────────────────────────────────────────
+
+describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
+  /** @type {ReturnType<typeof structuredClone>} */
+  let reviewsSnapshot;
+  let productsSnapshot;
+
+  beforeEach(() => {
+    reviewsSnapshot = structuredClone(db.reviews);
+    productsSnapshot = structuredClone(db.products);
+    // Reset analysis state
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+      r.previousAnalysis = null;
+    });
+    // Clear any previous logs
+    db.analysisLogs = [];
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    db.reviews = reviewsSnapshot;
+    db.products = productsSnapshot;
+    db.analysisLogs = [];
+  });
+
+  test("successful AI analysis creates audit log entry with correct fields", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Camera tuyet voi, chup anh net",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis to complete
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Verify audit log was created
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "success");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Camera tuyet voi, chup anh net");
+      assert.ok(log.result, "result should be present");
+      assert.ok(log.result.aspects.length > 0, "result should have aspects");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+      assert.ok(log.durationMs >= 0, "durationMs should be non-negative");
+      assert.ok(log.id, "log should have an id");
+      assert.ok(log.createdAt, "log should have createdAt");
+      assert.equal(log.attemptCount, 1);
+      assert.strictEqual(log.error, null);
+    });
+  });
+
+  test("failed AI analysis creates audit log entry with error details", async () => {
+    // Mock fetch to fail
+    mockFetchSequence([
+      { error: new Error("AI service unavailable") },
+      { error: new Error("AI service unavailable") }, // retry
+    ]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 3,
+          comment: "Test failure audit logging",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis + retries to complete
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "failed");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Test failure audit logging");
+      assert.strictEqual(log.result, null);
+      assert.ok(log.error, "error should be present");
+      assert.ok(log.error.message, "error.message should be present");
+      assert.ok(log.error.code, "error.code should be present");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by reviewId", async () => {
+    // Seed audit logs
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good product",
+        status: "success",
+        result: { overallSentiment: "positive" },
+        error: null,
+        durationMs: 150,
+        modelVersion: "absa-v1",
+        promptVersion: "1.0",
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad product",
+        status: "failed",
+        result: null,
+        error: { message: "Timeout", code: "TIMEOUT" },
+        durationMs: 15000,
+        modelVersion: null,
+        promptVersion: null,
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?reviewId=review-1`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].reviewId, "review-1");
+      assert.equal(body.data[0].status, "success");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by status", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 100,
+        createdAt: "2026-03-31T01:00:00.000Z",
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad",
+        status: "failed",
+        result: null,
+        error: { message: "Error", code: "TIMEOUT" },
+        durationMs: 15000,
+        createdAt: "2026-03-31T02:00:00.000Z",
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?status=failed`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].status, "failed");
+      assert.equal(body.data[0].reviewId, "review-2");
+    });
+  });
+
+  test("GET /analysis-logs respects limit parameter", async () => {
+    // Seed 5 logs
+    db.analysisLogs = Array.from({ length: 5 }, (_, i) => ({
+      id: `log-${i}`,
+      reviewId: "review-1",
+      productId: "prod-iphone-15",
+      inputText: `Comment ${i}`,
+      status: "success",
+      result: {},
+      error: null,
+      durationMs: 100 + i,
+      createdAt: new Date(Date.now() - i * 60000).toISOString(),
+    }));
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?limit=2`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 2);
+    });
+  });
+
+  test("GET /analysis-logs requires authentication", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+      );
+
+      assert.equal(res.status, 401);
+    });
+  });
+
+  test("GET /analysis-logs returns empty array when no logs exist", async () => {
+    db.analysisLogs = [];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.ok(Array.isArray(body.data));
+      assert.equal(body.data.length, 0);
+    });
+  });
+
+  test("GET /analysis-logs filters by productId", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "iPhone review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 120,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Samsung review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 130,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?productId=prod-iphone-15`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].productId, "prod-iphone-15");
+    });
+  });
+
+  test("audit log records modelVersion and promptVersion on success", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "General",
+          sentiment: "positive",
+          confidence: 0.85,
+          scores: { positive: 0.85, negative: 0.1, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 4,
+          comment: "San pham tot, dang mua",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for analysis
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const log = db.analysisLogs.find((l) => l.status === "success");
+      assert.ok(log, "Expected a success log entry");
+      assert.equal(log.modelVersion, "absa-v1");
+      assert.equal(log.promptVersion, "1.0");
+    });
+  });
+});
