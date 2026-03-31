@@ -11,7 +11,10 @@ import {
 import { requireAuth } from "../middleware/auth.js";
 import { Product } from "../models/Product.js";
 import { Review } from "../models/Review.js";
-import { analyzeSentiment } from "../services/sentimentAnalysis.js";
+import {
+	analyzeSentiment,
+	VALID_ASPECTS,
+} from "../services/sentimentAnalysis.js";
 
 export const reviewsRouter = express.Router();
 
@@ -33,6 +36,8 @@ function triggerSentimentAnalysis(reviewId, commentText) {
 
 /**
  * Call the AI sentiment service and persist the result.
+ * On success: saves new result, clears previousAnalysis.
+ * On failure: marks as failed, restores previousAnalysis if available.
  *
  * @param {string} reviewId
  * @param {string} commentText
@@ -45,12 +50,14 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 			await Review.findByIdAndUpdate(reviewId, {
 				analysisStatus: "completed",
 				analysisResult: result,
+				previousAnalysis: null,
 			});
 		} else {
 			const memReview = db.reviews.find((r) => r.id === reviewId);
 			if (memReview) {
 				memReview.analysisStatus = "completed";
 				memReview.analysisResult = result;
+				memReview.previousAnalysis = null;
 			}
 		}
 	} catch (error) {
@@ -58,12 +65,18 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 			`[SentimentAnalysis] Failed for review ${reviewId}: [${error.code ?? "UNKNOWN"}] ${error.message}`,
 		);
 
-		// Mark as failed so the UI can show appropriate state
+		// Mark as failed; restore previousAnalysis so frontend can still show old data
 		if (isDatabaseReady()) {
-			await Review.findByIdAndUpdate(reviewId, {
+			const review = await Review.findById(reviewId).lean().catch(() => null);
+			const updateFields = {
 				analysisStatus: "failed",
-				analysisResult: null,
-			}).catch((dbErr) => {
+			};
+			// If there's a previousAnalysis, restore it as the current result
+			if (review?.previousAnalysis) {
+				updateFields.analysisResult = review.previousAnalysis;
+				updateFields.previousAnalysis = null;
+			}
+			await Review.findByIdAndUpdate(reviewId, updateFields).catch((dbErr) => {
 				console.error(
 					`[SentimentAnalysis] DB update failed for review ${reviewId}:`,
 					dbErr.message,
@@ -73,7 +86,11 @@ async function analyzeAndUpdateReview(reviewId, commentText) {
 			const memReview = db.reviews.find((r) => r.id === reviewId);
 			if (memReview) {
 				memReview.analysisStatus = "failed";
-				memReview.analysisResult = null;
+				// Restore previous analysis if available
+				if (memReview.previousAnalysis) {
+					memReview.analysisResult = memReview.previousAnalysis;
+					memReview.previousAnalysis = null;
+				}
 			}
 		}
 	}
@@ -242,6 +259,8 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
 			oldComment !== payload.comment ||
 			oldImagesKey !== payload.images.join(",");
 		if (contentChanged) {
+			// Preserve old analysis in previousAnalysis before re-analyzing
+			review.previousAnalysis = review.analysisResult || null;
 			review.analysisStatus = "pending";
 			review.analysisResult = null;
 
@@ -286,6 +305,8 @@ reviewsRouter.put("/:id", requireAuth, async (req, res) => {
 		oldComment !== payload.comment ||
 		oldImagesKey !== payload.images.join(",");
 	if (contentChanged) {
+		// Preserve old analysis in previousAnalysis before re-analyzing
+		review.previousAnalysis = review.analysisResult || null;
 		review.analysisStatus = "pending";
 		review.analysisResult = null;
 	}
@@ -359,6 +380,46 @@ reviewsRouter.post("/upload-image", requireAuth, async (req, res) => {
 			.json(fail(error.message ?? "Upload anh that bai", 400));
 	}
 });
+
+/**
+ * GET /api/reviews/product/:productId/analysis-summary
+ *
+ * Returns aggregated sentiment analysis for a product's reviews.
+ * Computes per-aspect averages and overall sentiment distribution.
+ * Frontend uses this to show product-level sentiment insights.
+ */
+reviewsRouter.get(
+	"/product/:productId/analysis-summary",
+	async (req, res) => {
+		const productId = String(req.params.productId ?? "").trim();
+
+		if (!productId) {
+			return res.status(400).json(fail("productId is required", 400));
+		}
+
+		if (!isDatabaseReady()) {
+			// In-memory aggregation
+			const reviews = db.reviews.filter(
+				(r) =>
+					r.productId === productId &&
+					r.analysisStatus === "completed" &&
+					r.analysisResult,
+			);
+
+			return res.json(ok(buildAnalysisSummary(reviews, productId)));
+		}
+
+		// MongoDB aggregation
+		const reviews = await Review.find({
+			productId,
+			analysisStatus: "completed",
+			analysisResult: { $ne: null },
+		})
+			.lean();
+
+		return res.json(ok(buildAnalysisSummary(reviews, productId)));
+	},
+);
 
 async function syncProductRating(productId) {
 	const stats = await Review.aggregate([
@@ -448,4 +509,102 @@ function isHttpUrl(value) {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Build aggregated analysis summary from reviews with completed analysis.
+ *
+ * Returns per-aspect sentiment averages and overall sentiment distribution.
+ *
+ * @param {Array} reviews - Reviews with analysisResult
+ * @param {string} productId
+ * @returns {Object} Analysis summary
+ */
+function buildAnalysisSummary(reviews, productId) {
+	const totalAnalyzed = reviews.length;
+
+	if (totalAnalyzed === 0) {
+		return {
+			productId,
+			totalReviews: 0,
+			totalAnalyzed: 0,
+			sentimentDistribution: { positive: 0, negative: 0, neutral: 0 },
+			aspectSummary: [],
+		};
+	}
+
+	// Count overall sentiment distribution
+	const sentimentDist = { positive: 0, negative: 0, neutral: 0 };
+	for (const review of reviews) {
+		const sentiment = review.analysisResult?.overallSentiment;
+		if (sentiment && sentimentDist[sentiment] !== undefined) {
+			sentimentDist[sentiment]++;
+		}
+	}
+
+	// Aggregate per-aspect data
+	const aspectMap = new Map();
+	for (const review of reviews) {
+		const aspects = review.analysisResult?.aspects ?? [];
+		for (const aspect of aspects) {
+			if (!aspect.aspect) continue;
+
+			if (!aspectMap.has(aspect.aspect)) {
+				aspectMap.set(aspect.aspect, {
+					aspect: aspect.aspect,
+					mentionCount: 0,
+					sentimentCounts: { positive: 0, negative: 0, neutral: 0 },
+					avgConfidence: 0,
+					totalConfidence: 0,
+					avgScores: { positive: 0, negative: 0, neutral: 0 },
+					totalScores: { positive: 0, negative: 0, neutral: 0 },
+				});
+			}
+
+			const entry = aspectMap.get(aspect.aspect);
+			entry.mentionCount++;
+			entry.totalConfidence += aspect.confidence ?? 0;
+
+			if (aspect.sentiment && entry.sentimentCounts[aspect.sentiment] !== undefined) {
+				entry.sentimentCounts[aspect.sentiment]++;
+			}
+
+			if (aspect.scores) {
+				entry.totalScores.positive += aspect.scores.positive ?? 0;
+				entry.totalScores.negative += aspect.scores.negative ?? 0;
+				entry.totalScores.neutral += aspect.scores.neutral ?? 0;
+			}
+		}
+	}
+
+	// Compute averages and sort by mention count
+	const aspectSummary = Array.from(aspectMap.values())
+		.map((entry) => ({
+			aspect: entry.aspect,
+			mentionCount: entry.mentionCount,
+			sentimentCounts: entry.sentimentCounts,
+			avgConfidence: Number(
+				(entry.totalConfidence / entry.mentionCount).toFixed(3),
+			),
+			avgScores: {
+				positive: Number(
+					(entry.totalScores.positive / entry.mentionCount).toFixed(3),
+				),
+				negative: Number(
+					(entry.totalScores.negative / entry.mentionCount).toFixed(3),
+				),
+				neutral: Number(
+					(entry.totalScores.neutral / entry.mentionCount).toFixed(3),
+				),
+			},
+		}))
+		.sort((a, b) => b.mentionCount - a.mentionCount);
+
+	return {
+		productId,
+		totalReviews: totalAnalyzed,
+		totalAnalyzed,
+		sentimentDistribution: sentimentDist,
+		aspectSummary,
+	};
 }

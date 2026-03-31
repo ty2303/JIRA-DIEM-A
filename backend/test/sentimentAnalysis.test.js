@@ -343,4 +343,133 @@ describe("sentimentAnalysis service", () => {
 		assert.equal(error.message, "test");
 		assert.ok(error instanceof Error);
 	});
+
+	test("maps unknown aspect names to Others", async () => {
+		const mock = await createMockServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				JSON.stringify({
+					results: [
+						{
+							aspect: "UnknownAspect",
+							sentiment: "positive",
+							confidence: 0.8,
+							scores: { positive: 0.8, negative: 0.1, neutral: 0.1 },
+						},
+						{
+							aspect: "Camera",
+							sentiment: "negative",
+							confidence: 0.7,
+							scores: { positive: 0.1, negative: 0.7, neutral: 0.2 },
+						},
+					],
+				}),
+			);
+		});
+
+		process.env.AI_SENTIMENT_URL = mock.url;
+
+		try {
+			const result = await analyzeSentiment("test unknown aspect");
+			// Unknown aspect should be mapped to "Others"
+			const others = result.aspects.find((a) => a.aspect === "Others");
+			assert.ok(others, "Unknown aspect should be mapped to Others");
+			assert.equal(others.sentiment, "positive");
+
+			const camera = result.aspects.find((a) => a.aspect === "Camera");
+			assert.ok(camera);
+			assert.equal(camera.sentiment, "negative");
+		} finally {
+			await mock.close();
+		}
+	});
+
+	test("deduplicates aspects when multiple unknowns map to Others", async () => {
+		const mock = await createMockServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				JSON.stringify({
+					results: [
+						{
+							aspect: "FakeAspect1",
+							sentiment: "positive",
+							confidence: 0.6,
+							scores: { positive: 0.6, negative: 0.2, neutral: 0.2 },
+						},
+						{
+							aspect: "FakeAspect2",
+							sentiment: "negative",
+							confidence: 0.9,
+							scores: { positive: 0.05, negative: 0.9, neutral: 0.05 },
+						},
+					],
+				}),
+			);
+		});
+
+		process.env.AI_SENTIMENT_URL = mock.url;
+
+		try {
+			const result = await analyzeSentiment("test dedup");
+			// Both unknowns map to "Others" — should deduplicate to one entry (highest confidence)
+			const othersAspects = result.aspects.filter((a) => a.aspect === "Others");
+			assert.equal(othersAspects.length, 1, "Should have exactly one Others entry");
+			assert.equal(othersAspects[0].confidence, 0.9, "Should keep highest confidence");
+			assert.equal(othersAspects[0].sentiment, "negative");
+		} finally {
+			await mock.close();
+		}
+	});
+
+	test("includes modelVersion and promptVersion in result", async () => {
+		const mock = await createMockServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				JSON.stringify(
+					buildApiResponse([
+						{ aspect: "General", sentiment: "positive", confidence: 0.8 },
+					]),
+				),
+			);
+		});
+
+		process.env.AI_SENTIMENT_URL = mock.url;
+		process.env.AI_SENTIMENT_MODEL_VERSION = "test-model-v2";
+		process.env.AI_SENTIMENT_PROMPT_VERSION = "2.5";
+
+		try {
+			const result = await analyzeSentiment("test version tracking");
+			assert.equal(result.modelVersion, "test-model-v2");
+			assert.equal(result.promptVersion, "2.5");
+		} finally {
+			delete process.env.AI_SENTIMENT_MODEL_VERSION;
+			delete process.env.AI_SENTIMENT_PROMPT_VERSION;
+			await mock.close();
+		}
+	});
+
+	test("uses default modelVersion and promptVersion when env not set", async () => {
+		const mock = await createMockServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				JSON.stringify(
+					buildApiResponse([
+						{ aspect: "General", sentiment: "neutral", confidence: 0.5 },
+					]),
+				),
+			);
+		});
+
+		process.env.AI_SENTIMENT_URL = mock.url;
+		delete process.env.AI_SENTIMENT_MODEL_VERSION;
+		delete process.env.AI_SENTIMENT_PROMPT_VERSION;
+
+		try {
+			const result = await analyzeSentiment("test defaults");
+			assert.equal(result.modelVersion, "absa-v1");
+			assert.equal(result.promptVersion, "1.0");
+		} finally {
+			await mock.close();
+		}
+	});
 });
