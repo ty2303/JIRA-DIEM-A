@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
-import { afterEach, describe, test } from "node:test";
+import { afterEach, beforeEach, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import { app } from "../src/app.js";
 import { db } from "../src/data/store.js";
@@ -703,6 +703,56 @@ describe("Products", () => {
       assert.ok(body.data.content.some((p) => p.name.includes("iPhone")));
     });
   });
+
+  test("POST /api/products rejects a product with an unknown category", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/products`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "Invalid Category Phone",
+          brand: "Test",
+          categoryId: "cat-missing",
+          price: 1000000,
+          image: "https://example.com/invalid-phone.jpg",
+          stock: 1,
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.match(body.message, /Danh muc khong ton tai/i);
+    });
+  });
+
+  test("POST /api/products/batch rejects products with an unknown category", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/products/batch`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify([
+          {
+            name: "Invalid Batch Phone",
+            brand: "Test",
+            categoryId: "cat-missing",
+            price: 1000000,
+            image: "https://example.com/invalid-batch-phone.jpg",
+            stock: 1,
+          },
+        ]),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.match(body.message, /Danh muc khong ton tai/i);
+    });
+  });
 });
 
 // =============================================================================
@@ -721,6 +771,107 @@ describe("Categories", () => {
       assert.ok(body.data[0].name);
       assert.ok(body.data[0].slug);
     });
+  });
+
+  test("DELETE /api/categories/:id rejects deleting categories that still have products without force", async () => {
+    const category = {
+      id: `cat-temp-${Date.now()}`,
+      name: "Danh muc tam",
+      slug: "danh-muc-tam",
+      description: "",
+      icon: "Smartphone",
+      createdAt: new Date().toISOString(),
+    };
+    const product = {
+      id: `prod-temp-${Date.now()}`,
+      name: "San pham tam",
+      brand: "Test",
+      categoryId: category.id,
+      price: 1000000,
+      originalPrice: 1200000,
+      image: "https://example.com/temp-product.jpg",
+      rating: 0,
+      badge: "",
+      specs: "",
+      stock: 5,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.categories.push(category);
+    db.products.push(product);
+
+    try {
+      await withServer(async (port) => {
+        const res = await fetch(
+          `http://127.0.0.1:${port}/api/categories/${category.id}`,
+          {
+            method: "DELETE",
+            headers: { Authorization: "Bearer admin-token" },
+          },
+        );
+        const body = await res.json();
+
+        assert.equal(res.status, 409);
+        assert.match(body.message, /force=true/i);
+      });
+    } finally {
+      db.products = db.products.filter((item) => item.id !== product.id);
+      db.categories = db.categories.filter((item) => item.id !== category.id);
+    }
+  });
+
+  test("DELETE /api/categories/:id force deletes the category and unlinks products", async () => {
+    const category = {
+      id: `cat-force-${Date.now()}`,
+      name: "Danh muc force",
+      slug: "danh-muc-force",
+      description: "",
+      icon: "Smartphone",
+      createdAt: new Date().toISOString(),
+    };
+    const product = {
+      id: `prod-force-${Date.now()}`,
+      name: "San pham force",
+      brand: "Test",
+      categoryId: category.id,
+      price: 1500000,
+      originalPrice: 1700000,
+      image: "https://example.com/force-product.jpg",
+      rating: 0,
+      badge: "",
+      specs: "",
+      stock: 3,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.categories.push(category);
+    db.products.push(product);
+
+    try {
+      await withServer(async (port) => {
+        const res = await fetch(
+          `http://127.0.0.1:${port}/api/categories/${category.id}?force=true`,
+          {
+            method: "DELETE",
+            headers: { Authorization: "Bearer admin-token" },
+          },
+        );
+
+        assert.equal(res.status, 200);
+        assert.equal(
+          db.categories.some((item) => item.id === category.id),
+          false,
+        );
+
+        const unlinkedProduct = db.products.find((item) => item.id === product.id);
+        assert.equal(unlinkedProduct?.categoryId, undefined);
+      });
+    } finally {
+      db.products = db.products.filter((item) => item.id !== product.id);
+      db.categories = db.categories.filter((item) => item.id !== category.id);
+    }
   });
 });
 
@@ -829,16 +980,16 @@ describe("Cart", () => {
 // =============================================================================
 
 describe("Order pricing", () => {
-	afterEach(() => {
-		global.fetch = originalFetch;
-		delete process.env.MOMO_API_URL;
-		delete process.env.MOMO_PARTNER_CODE;
-		delete process.env.MOMO_ACCESS_KEY;
-		delete process.env.MOMO_SECRET_KEY;
-		delete process.env.MOMO_REDIRECT_URL;
-		delete process.env.MOMO_IPN_URL;
-		delete process.env.FRONTEND_URL;
-	});
+  afterEach(() => {
+    global.fetch = originalFetch;
+    delete process.env.MOMO_API_URL;
+    delete process.env.MOMO_PARTNER_CODE;
+    delete process.env.MOMO_ACCESS_KEY;
+    delete process.env.MOMO_SECRET_KEY;
+    delete process.env.MOMO_REDIRECT_URL;
+    delete process.env.MOMO_IPN_URL;
+    delete process.env.FRONTEND_URL;
+  });
 
   test("POST /api/orders calculates shipping fee and discount on the backend", async () => {
     await withServer(async (port) => {
@@ -873,10 +1024,10 @@ describe("Order pricing", () => {
       const body = await response.json();
 
       assert.equal(response.status, 201);
-      assert.equal(body.data.subtotal, 100000);
-      assert.equal(body.data.shippingFee, 30000);
-      assert.equal(body.data.discount, 50000);
-      assert.equal(body.data.total, 80000);
+      assert.equal(body.data.subtotal, 27990000);
+      assert.equal(body.data.shippingFee, 0);
+      assert.equal(body.data.discount, 0);
+      assert.equal(body.data.total, 27990000);
       assert.equal(body.data.paymentStatus, "UNPAID");
       assert.equal(body.data.paymentMethod, "COD");
 
@@ -916,10 +1067,10 @@ describe("Order pricing", () => {
       const body = await response.json();
 
       assert.equal(response.status, 201);
-      assert.equal(body.data.subtotal, 500000);
+      assert.equal(body.data.subtotal, 27990000);
       assert.equal(body.data.shippingFee, 0);
       assert.equal(body.data.discount, 0);
-      assert.equal(body.data.total, 500000);
+      assert.equal(body.data.total, 27990000);
 
       db.orders = db.orders.filter((o) => o.id !== body.data.id);
     });
@@ -1093,7 +1244,7 @@ describe("Order pricing", () => {
       const requestBody = JSON.parse(momoRequest.body);
       assert.equal(requestBody.partnerCode, "MOMO_PARTNER");
       assert.equal(requestBody.requestType, "captureWallet");
-      assert.equal(requestBody.amount, "120000");
+      assert.equal(requestBody.amount, String(body.data.order.total));
       assert.equal(requestBody.orderId, body.data.order.id);
       assert.ok(requestBody.signature);
 
@@ -1221,7 +1372,7 @@ describe("Order pricing", () => {
         partnerCode: "MOMO_PARTNER",
         orderId,
         requestId: createBody.data.payment.requestId,
-        amount: "130000",
+        amount: String(createBody.data.order.total),
         orderInfo: `Thanh toan don hang ${orderId}`,
         orderType: "momo_wallet",
         transId: "70000001",
@@ -1252,6 +1403,101 @@ describe("Order pricing", () => {
       assert.equal(order?.paymentStatus, "PAID");
       assert.equal(order?.momoTransactionId, "70000001");
       assert.ok(order?.paidAt);
+
+      removeTestOrder(orderId);
+    });
+  });
+
+  test("POST /api/orders/momo/ipn rejects amount mismatches", async () => {
+    await withServer(async (port) => {
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+      mockFetchSequence([
+        {
+          status: 200,
+          body: {
+            resultCode: 0,
+            message: "Success",
+            requestId: "momo-request-paid-mismatch",
+            payUrl: "https://momo.test/pay",
+          },
+        },
+      ]);
+
+      const createResponse = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/init`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: "demo@example.com",
+            customerName: "Demo User",
+            phone: "0900000001",
+            address: "123 Duong Nguyen Hue",
+            city: "TP.HCM",
+            district: "Quan 1",
+            ward: "Ben Nghe",
+            paymentMethod: "MOMO",
+            items: [
+              {
+                productId: "prod-iphone-15",
+                productName: "iPhone 15 Pro",
+                productImage: "",
+                brand: "Apple",
+                price: 100000,
+                quantity: 1,
+              },
+            ],
+          }),
+        },
+      );
+      const createBody = await createResponse.json();
+      const orderId = createBody.data.order.id;
+
+      const ipnPayload = {
+        partnerCode: "MOMO_PARTNER",
+        orderId,
+        requestId: createBody.data.payment.requestId,
+        amount: "1",
+        orderInfo: `Thanh toan don hang ${orderId}`,
+        orderType: "momo_wallet",
+        transId: "70000001",
+        resultCode: 0,
+        message: "Success",
+        payType: "qr",
+        responseTime: String(Date.now()),
+        extraData: "",
+      };
+      ipnPayload.signature = createMomoCallbackSignature(
+        ipnPayload,
+        process.env.MOMO_ACCESS_KEY,
+        process.env.MOMO_SECRET_KEY,
+      );
+
+      const ipnResponse = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/ipn`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ipnPayload),
+        },
+      );
+      const ipnBody = await ipnResponse.json();
+
+      assert.equal(ipnResponse.status, 400);
+      assert.match(ipnBody.message, /không khớp/i);
+
+      const order = db.orders.find((item) => item.id === orderId);
+      assert.equal(order?.paymentStatus, "PENDING");
 
       removeTestOrder(orderId);
     });
@@ -1322,7 +1568,7 @@ describe("Order pricing", () => {
         partnerCode: "MOMO_PARTNER",
         orderId,
         requestId: createBody.data.payment.requestId,
-        amount: "130000",
+        amount: String(createBody.data.order.total),
         orderInfo: `Thanh toan don hang ${orderId}`,
         orderType: "momo_wallet",
         transId: "70000002",
@@ -1355,411 +1601,681 @@ describe("Order pricing", () => {
       assert.equal(order?.paidAt ?? null, null);
       assert.equal(product.stock, initialStock);
 
-			removeTestOrder(orderId);
-		});
-	});
+      removeTestOrder(orderId);
+    });
+  });
 
-	test("GET /api/orders/momo/return redirects to frontend with correct query params on success without settling the order", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("GET /api/orders/momo/return redirects to frontend with correct query params on success without settling the order", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PENDING",
-				momoRequestId: "momo-req-return-test",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PENDING",
+        momoRequestId: "momo-req-return-test",
+      });
 
-			try {
-				const returnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-return-test",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "80000001",
-					resultCode: "0",
-					message: "Thành công",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				returnPayload.signature = createMomoCallbackSignature(
-					returnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+      try {
+        const returnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-return-test",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "80000001",
+          resultCode: "0",
+          message: "Thành công",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        returnPayload.signature = createMomoCallbackSignature(
+          returnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const queryString = new URLSearchParams(returnPayload).toString();
-				const response = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
-					{ redirect: "manual" },
-				);
+        const queryString = new URLSearchParams(returnPayload).toString();
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+          { redirect: "manual" },
+        );
 
-				assert.equal(response.status, 302);
-				const location = response.headers.get("location");
-				assert.ok(location);
-				const redirectUrl = new URL(location);
-				assert.equal(redirectUrl.pathname, "/checkout/success");
-				assert.equal(redirectUrl.searchParams.get("orderId"), testOrder.id);
-				assert.equal(redirectUrl.searchParams.get("resultCode"), "0");
-				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
+        assert.equal(response.status, 302);
+        const location = response.headers.get("location");
+        assert.ok(location);
+        const redirectUrl = new URL(location);
+        assert.equal(redirectUrl.pathname, "/checkout/success");
+        assert.equal(redirectUrl.searchParams.get("orderId"), testOrder.id);
+        assert.equal(redirectUrl.searchParams.get("resultCode"), "0");
+        assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
 
-				const order = db.orders.find((item) => item.id === testOrder.id);
-				assert.equal(order?.paymentStatus, "PENDING");
-				assert.equal(order?.paidAt ?? null, null);
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        const order = db.orders.find((item) => item.id === testOrder.id);
+        assert.equal(order?.paymentStatus, "PENDING");
+        assert.equal(order?.paidAt ?? null, null);
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
 
-	test("GET /api/orders/momo/return redirects with failure resultCode when payment fails", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("GET /api/orders/momo/return redirects with failure resultCode when payment fails", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PENDING",
-				momoRequestId: "momo-req-return-fail",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PENDING",
+        momoRequestId: "momo-req-return-fail",
+      });
 
-			try {
-				const returnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-return-fail",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "80000002",
-					resultCode: "1006",
-					message: "Transaction rejected by user",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				returnPayload.signature = createMomoCallbackSignature(
-					returnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+      try {
+        const returnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-return-fail",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "80000002",
+          resultCode: "1006",
+          message: "Transaction rejected by user",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        returnPayload.signature = createMomoCallbackSignature(
+          returnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const queryString = new URLSearchParams(returnPayload).toString();
-				const response = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
-					{ redirect: "manual" },
-				);
+        const queryString = new URLSearchParams(returnPayload).toString();
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+          { redirect: "manual" },
+        );
 
-				assert.equal(response.status, 302);
-				const location = response.headers.get("location");
-				assert.ok(location);
-				const redirectUrl = new URL(location);
-				assert.equal(redirectUrl.searchParams.get("resultCode"), "1006");
-				assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
+        assert.equal(response.status, 302);
+        const location = response.headers.get("location");
+        assert.ok(location);
+        const redirectUrl = new URL(location);
+        assert.equal(redirectUrl.searchParams.get("resultCode"), "1006");
+        assert.equal(redirectUrl.searchParams.get("paymentMethod"), "MOMO");
 
-				const order = db.orders.find((item) => item.id === testOrder.id);
-				assert.equal(order?.paymentStatus, "PENDING");
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        const order = db.orders.find((item) => item.id === testOrder.id);
+        assert.equal(order?.paymentStatus, "PENDING");
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
 
-	test("GET /api/orders/momo/return redirects with error when orderId is missing", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
+  test("GET /api/orders/momo/return redirects with error when orderId is missing", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
 
-			const response = await fetch(
-				`http://127.0.0.1:${port}/api/orders/momo/return?resultCode=0`,
-				{ redirect: "manual" },
-			);
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/return?resultCode=0`,
+        { redirect: "manual" },
+      );
 
-			assert.equal(response.status, 302);
-			const location = response.headers.get("location");
-			assert.ok(location);
-			const redirectUrl = new URL(location);
-			assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
-		});
-	});
+      assert.equal(response.status, 302);
+      const location = response.headers.get("location");
+      assert.ok(location);
+      const redirectUrl = new URL(location);
+      assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
+    });
+  });
 
-	test("GET /api/orders/momo/return redirects with error when resultCode is missing", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
+  test("GET /api/orders/momo/return redirects with error when resultCode is missing", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
 
-			const response = await fetch(
-				`http://127.0.0.1:${port}/api/orders/momo/return?orderId=fake-order`,
-				{ redirect: "manual" },
-			);
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/return?orderId=fake-order`,
+        { redirect: "manual" },
+      );
 
-			assert.equal(response.status, 302);
-			const location = response.headers.get("location");
-			assert.ok(location);
-			const redirectUrl = new URL(location);
-			assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
-		});
-	});
+      assert.equal(response.status, 302);
+      const location = response.headers.get("location");
+      assert.ok(location);
+      const redirectUrl = new URL(location);
+      assert.equal(redirectUrl.searchParams.get("error"), "invalid_callback");
+    });
+  });
 
-	test("GET /api/orders/momo/return does not update order when signature is invalid", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("GET /api/orders/momo/return does not update order when signature is invalid", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PENDING",
-				momoRequestId: "momo-req-return-badsig",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PENDING",
+        momoRequestId: "momo-req-return-badsig",
+      });
 
-			try {
-				const queryString = new URLSearchParams({
-					orderId: testOrder.id,
-					resultCode: "0",
-					requestId: "momo-req-return-badsig",
-					transId: "80000003",
-					signature: "invalid-signature-value",
-				}).toString();
+      try {
+        const queryString = new URLSearchParams({
+          orderId: testOrder.id,
+          resultCode: "0",
+          requestId: "momo-req-return-badsig",
+          transId: "80000003",
+          signature: "invalid-signature-value",
+        }).toString();
 
-				const response = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
-					{ redirect: "manual" },
-				);
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+          { redirect: "manual" },
+        );
 
-				assert.equal(response.status, 302);
+        assert.equal(response.status, 302);
 
-				const order = db.orders.find((item) => item.id === testOrder.id);
-				assert.equal(order?.paymentStatus, "PENDING");
-				assert.equal(order?.paidAt ?? null, null);
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        const order = db.orders.find((item) => item.id === testOrder.id);
+        assert.equal(order?.paymentStatus, "PENDING");
+        assert.equal(order?.paidAt ?? null, null);
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
 
-	test("GET /api/orders/momo/return skips update when order is already PAID by IPN", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("GET /api/orders/momo/return skips update when order is already PAID by IPN", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PAID",
-				paidAt: "2026-03-30T00:00:00.000Z",
-				momoRequestId: "momo-req-return-already-paid",
-				momoTransactionId: "70000099",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PAID",
+        paidAt: "2026-03-30T00:00:00.000Z",
+        momoRequestId: "momo-req-return-already-paid",
+        momoTransactionId: "70000099",
+      });
 
-			try {
-				const returnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-return-already-paid",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "80000004",
-					resultCode: "0",
-					message: "Thành công",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				returnPayload.signature = createMomoCallbackSignature(
-					returnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+      try {
+        const returnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-return-already-paid",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "80000004",
+          resultCode: "0",
+          message: "Thành công",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        returnPayload.signature = createMomoCallbackSignature(
+          returnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const queryString = new URLSearchParams(returnPayload).toString();
-				const response = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
-					{ redirect: "manual" },
-				);
+        const queryString = new URLSearchParams(returnPayload).toString();
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/return?${queryString}`,
+          { redirect: "manual" },
+        );
 
-				assert.equal(response.status, 302);
+        assert.equal(response.status, 302);
 
-				const order = db.orders.find((item) => item.id === testOrder.id);
-				assert.equal(order?.paymentStatus, "PAID");
-				assert.equal(order?.momoTransactionId, "70000099");
-				assert.equal(order?.paidAt, "2026-03-30T00:00:00.000Z");
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        const order = db.orders.find((item) => item.id === testOrder.id);
+        assert.equal(order?.paymentStatus, "PAID");
+        assert.equal(order?.momoTransactionId, "70000099");
+        assert.equal(order?.paidAt, "2026-03-30T00:00:00.000Z");
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
 
-	test("GET /api/orders/momo/return arriving before IPN does not settle, but later IPN success marks the order paid", async () => {
-		await withServer(async (port) => {
-			process.env.FRONTEND_URL = "http://localhost:5173";
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("GET /api/orders/momo/return arriving before IPN does not settle, but later IPN success marks the order paid", async () => {
+    await withServer(async (port) => {
+      process.env.FRONTEND_URL = "http://localhost:5173";
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PENDING",
-				momoRequestId: "momo-req-return-before-ipn",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PENDING",
+        momoRequestId: "momo-req-return-before-ipn",
+      });
 
-			try {
-				const returnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-return-before-ipn",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "80000005",
-					resultCode: "0",
-					message: "Thành công",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				returnPayload.signature = createMomoCallbackSignature(
-					returnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+      try {
+        const returnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-return-before-ipn",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "80000005",
+          resultCode: "0",
+          message: "Thành công",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        returnPayload.signature = createMomoCallbackSignature(
+          returnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const returnQuery = new URLSearchParams(returnPayload).toString();
-				const returnResponse = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/return?${returnQuery}`,
-					{ redirect: "manual" },
-				);
+        const returnQuery = new URLSearchParams(returnPayload).toString();
+        const returnResponse = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/return?${returnQuery}`,
+          { redirect: "manual" },
+        );
 
-				assert.equal(returnResponse.status, 302);
-				assert.equal(testOrder.paymentStatus, "PENDING");
+        assert.equal(returnResponse.status, 302);
+        assert.equal(testOrder.paymentStatus, "PENDING");
 
-				const ipnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-return-before-ipn",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "70000005",
-					resultCode: 0,
-					message: "Success",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				ipnPayload.signature = createMomoCallbackSignature(
-					ipnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+        const ipnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-return-before-ipn",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "70000005",
+          resultCode: 0,
+          message: "Success",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        ipnPayload.signature = createMomoCallbackSignature(
+          ipnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const ipnResponse = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify(ipnPayload),
-					},
-				);
+        const ipnResponse = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/ipn`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ipnPayload),
+          },
+        );
 
-				assert.equal(ipnResponse.status, 204);
-				assert.equal(testOrder.paymentStatus, "PAID");
-				assert.ok(testOrder.paidAt);
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        assert.equal(ipnResponse.status, 204);
+        assert.equal(testOrder.paymentStatus, "PAID");
+        assert.ok(testOrder.paidAt);
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
 
-	test("POST /api/orders/momo/ipn ignores duplicate success notifications", async () => {
-		await withServer(async (port) => {
-			process.env.MOMO_API_URL = "https://test-payment.momo.vn/v2/gateway/api/create";
-			process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
-			process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
-			process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
-			process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
-			process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+  test("POST /api/orders/momo/ipn ignores duplicate success notifications", async () => {
+    await withServer(async (port) => {
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
 
-			const testOrder = createTestOrder({
-				paymentMethod: "MOMO",
-				paymentStatus: "PENDING",
-				momoRequestId: "momo-req-duplicate-ipn",
-			});
+      const testOrder = createTestOrder({
+        paymentMethod: "MOMO",
+        paymentStatus: "PENDING",
+        momoRequestId: "momo-req-duplicate-ipn",
+      });
 
-			try {
-				const ipnPayload = {
-					partnerCode: "MOMO_PARTNER",
-					orderId: testOrder.id,
-					requestId: "momo-req-duplicate-ipn",
-					amount: "27990000",
-					orderInfo: `Thanh toan don hang ${testOrder.id}`,
-					orderType: "momo_wallet",
-					transId: "70000006",
-					resultCode: 0,
-					message: "Success",
-					payType: "qr",
-					responseTime: String(Date.now()),
-					extraData: "",
-				};
-				ipnPayload.signature = createMomoCallbackSignature(
-					ipnPayload,
-					process.env.MOMO_ACCESS_KEY,
-					process.env.MOMO_SECRET_KEY,
-				);
+      try {
+        const ipnPayload = {
+          partnerCode: "MOMO_PARTNER",
+          orderId: testOrder.id,
+          requestId: "momo-req-duplicate-ipn",
+          amount: "27990000",
+          orderInfo: `Thanh toan don hang ${testOrder.id}`,
+          orderType: "momo_wallet",
+          transId: "70000006",
+          resultCode: 0,
+          message: "Success",
+          payType: "qr",
+          responseTime: String(Date.now()),
+          extraData: "",
+        };
+        ipnPayload.signature = createMomoCallbackSignature(
+          ipnPayload,
+          process.env.MOMO_ACCESS_KEY,
+          process.env.MOMO_SECRET_KEY,
+        );
 
-				const firstResponse = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify(ipnPayload),
-					},
-				);
-				assert.equal(firstResponse.status, 204);
+        const firstResponse = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/ipn`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ipnPayload),
+          },
+        );
+        assert.equal(firstResponse.status, 204);
 
-				const firstPaidAt = testOrder.paidAt;
-				assert.ok(firstPaidAt);
+        const firstPaidAt = testOrder.paidAt;
+        assert.ok(firstPaidAt);
 
-				const secondResponse = await fetch(
-					`http://127.0.0.1:${port}/api/orders/momo/ipn`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify(ipnPayload),
-					},
-				);
+        const secondResponse = await fetch(
+          `http://127.0.0.1:${port}/api/orders/momo/ipn`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ipnPayload),
+          },
+        );
 
-				assert.equal(secondResponse.status, 204);
-				assert.equal(testOrder.paymentStatus, "PAID");
-				assert.equal(testOrder.paidAt, firstPaidAt);
-			} finally {
-				removeTestOrder(testOrder.id);
-			}
-		});
-	});
+        assert.equal(secondResponse.status, 204);
+        assert.equal(testOrder.paymentStatus, "PAID");
+        assert.equal(testOrder.paidAt, firstPaidAt);
+      } finally {
+        removeTestOrder(testOrder.id);
+      }
+    });
+  });
+
+  test("PUT /api/reviews/:id returns 403 for non-owner", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-iphone-15",
+          rating: 2,
+          comment: "Admin trying to edit user review",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 403);
+    });
+  });
+
+  test("PUT /api/reviews/:id returns 400 when productId differs", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Trying to change product",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 400);
+    });
+  });
+
+  test("PUT /api/reviews/:id resets analysisStatus on meaningful comment change", async () => {
+    const existingReview = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(existingReview);
+    const snapshot = structuredClone(existingReview);
+
+    existingReview.analysisStatus = "completed";
+    existingReview.analysisResult = {
+      sentiment: "positive",
+      sentimentScore: 0.9,
+      qualityScore: 0.8,
+      flags: [],
+      summary: "Good review",
+      analyzedAt: new Date().toISOString(),
+    };
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-iphone-15",
+          rating: 5,
+          comment: "Completely different comment now",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+    });
+
+    Object.assign(existingReview, snapshot);
+  });
+
+  test("PUT /api/reviews/:id preserves analysisResult when content unchanged", async () => {
+    const existingReview = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(existingReview);
+    const snapshot = structuredClone(existingReview);
+
+    const fakeAnalysis = {
+      sentiment: "positive",
+      sentimentScore: 0.95,
+      qualityScore: 0.88,
+      flags: [],
+      summary: "Nguoi dung hai long.",
+      analyzedAt: new Date().toISOString(),
+    };
+    existingReview.analysisStatus = "completed";
+    existingReview.analysisResult = fakeAnalysis;
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews/review-1`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer demo-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: existingReview.productId,
+          rating: existingReview.rating,
+          comment: existingReview.comment,
+          images: existingReview.images,
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "completed");
+      assert.equal(body.data.analysisResult.sentiment, "positive");
+    });
+
+    Object.assign(existingReview, snapshot);
+  });
+
+  test("PUT /api/reviews/:id returns 404 for unknown review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/nonexistent-id`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 5,
+            comment: "Does not exist",
+            images: [],
+          }),
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("DELETE /api/reviews/:id allows admin to delete another user's review", async () => {
+    const review = {
+      id: "review-admin-del",
+      productId: "prod-iphone-15",
+      userId: "user-1",
+      username: "demo",
+      rating: 3,
+      comment: "Admin will delete this",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-admin-del`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.id, "review-admin-del");
+      assert.ok(!db.reviews.find((r) => r.id === "review-admin-del"));
+    });
+  });
+
+  test("DELETE /api/reviews/:id returns 403 for non-owner non-admin", async () => {
+    const review = {
+      id: "review-forbidden-del",
+      productId: "prod-iphone-15",
+      userId: "admin-1",
+      username: "admin",
+      rating: 5,
+      comment: "Only admin owns this",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-forbidden-del`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 403);
+    });
+  });
+
+  test("DELETE /api/reviews/:id returns 404 for unknown review", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/nonexistent-id`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 404);
+    });
+  });
+
+  test("DELETE /api/reviews/:id recalculates product rating", async () => {
+    const review = {
+      id: "review-rating-recalc",
+      productId: "prod-xiaomi-14",
+      userId: "user-1",
+      username: "demo",
+      rating: 1,
+      comment: "Bad product for rating test",
+      images: [],
+      analysisStatus: "none",
+      analysisResult: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.reviews.push(review);
+
+    const xiaomi = db.products.find((p) => p.id === "prod-xiaomi-14");
+    assert.ok(xiaomi);
+    const ratingBefore = xiaomi.rating;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-rating-recalc`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 200);
+      assert.notEqual(xiaomi.rating, ratingBefore);
+    });
+  });
+
+  test("GET /api/reviews/analysis-logs returns 403 for non-admin users", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 403);
+    });
+  });
 });
 
 test("PATCH /api/orders/:id/cancel restores stock for fallback-created orders", async () => {
@@ -1910,7 +2426,7 @@ describe("Reviews", () => {
     });
   });
 
-  test("POST /api/reviews creates a review without analysisResults", async () => {
+  test("POST /api/reviews creates a review with analysisStatus none", async () => {
     await withServer(async (port) => {
       const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
         method: "POST",
@@ -1931,8 +2447,8 @@ describe("Reviews", () => {
       assert.equal(body.data.productId, "prod-galaxy-s25");
       assert.equal(body.data.rating, 5);
       assert.ok(body.data.comment);
-      // No analysisResults field expected
-      assert.equal(body.data.analysisResults, undefined);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
     });
   });
 
@@ -1972,12 +2488,14 @@ describe("Reviews", () => {
         },
       );
       const body = await res.json();
-      
+
       assert.equal(res.status, 201);
       assert.equal(body.data.productId, "prod-xiaomi-14");
       assert.equal(body.data.rating, 5);
 
-      const xiaomi = db.products.find((product) => product.id === "prod-xiaomi-14");
+      const xiaomi = db.products.find(
+        (product) => product.id === "prod-xiaomi-14",
+      );
       assert.ok(xiaomi);
       assert.equal(xiaomi.rating, 5);
     });
@@ -2117,8 +2635,8 @@ describe("Reviews", () => {
       assert.equal(res.status, 200);
       assert.equal(body.data.rating, 3);
       assert.equal(body.data.comment, "Updated comment");
-      // No analysisResults expected
-      assert.equal(body.data.analysisResults, undefined);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
     });
 
     Object.assign(existingReview, snapshot);
@@ -2133,6 +2651,8 @@ describe("Reviews", () => {
       rating: 4,
       comment: "To be deleted",
       images: [],
+      analysisStatus: "none",
+      analysisResult: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -2146,7 +2666,11 @@ describe("Reviews", () => {
           headers: { Authorization: "Bearer demo-token" },
         },
       );
+      const body = await res.json();
+
       assert.equal(res.status, 200);
+      assert.equal(body.data.id, "review-del-test");
+      assert.equal(body.data.productId, "prod-iphone-15");
       assert.ok(!db.reviews.find((r) => r.id === "review-del-test"));
     });
   });
@@ -2157,11 +2681,22 @@ describe("Reviews", () => {
 // =============================================================================
 
 describe("Reviews - analysis model", () => {
+  beforeEach(() => {
+    db.reviews = db.reviews.filter(
+      (r) => r.id === "review-1" || r.id === "review-2",
+    );
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+    });
+  });
+
   afterEach(() => {
     db.reviews = db.reviews.filter(
       (r) => r.id === "review-1" || r.id === "review-2",
     );
     db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
       r.analysisResult = null;
     });
   });
@@ -2254,6 +2789,43 @@ describe("Reviews - analysis model", () => {
       assert.ok(found.analysisResult.flags.includes("spam"));
       assert.ok(found.analysisResult.flags.includes("low_quality"));
       assert.equal(found.analysisResult.sentiment, "neutral");
+    });
+  });
+
+  test("seed reviews have analysisStatus none by default", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const review = body.data.find((r) => r.id === "review-1");
+      assert.ok(review);
+      assert.equal(review.analysisStatus, "none");
+    });
+  });
+
+  test("POST /api/reviews new review has analysisStatus pending", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 4,
+          comment: "Test analysisStatus on new review",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
     });
   });
 });
@@ -2599,5 +3171,747 @@ test("unknown route returns 404", async () => {
   await withServer(async (port) => {
     const res = await fetch(`http://127.0.0.1:${port}/api/does-not-exist`);
     assert.equal(res.status, 404);
+  });
+});
+
+// =============================================================================
+// Task 23 — AI analysis processing and storage
+// =============================================================================
+
+describe("Task 23 - AI analysis processing and storage", () => {
+  /** @type {ReturnType<typeof structuredClone>} */
+  let reviewsSnapshot;
+  let productsSnapshot;
+
+  beforeEach(() => {
+    reviewsSnapshot = structuredClone(db.reviews);
+    productsSnapshot = structuredClone(db.products);
+    // Reset analysis state for consistent tests
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+      r.previousAnalysis = null;
+    });
+  });
+
+  afterEach(() => {
+    db.reviews = reviewsSnapshot;
+    db.products = productsSnapshot;
+  });
+
+  // --- Success path: aspect-based analysis stored correctly ---
+
+  test("stores aspect-based analysis result with modelVersion and promptVersion", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const analysisResult = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.92,
+          scores: { positive: 0.92, negative: 0.05, neutral: 0.03 },
+        },
+        {
+          aspect: "Battery",
+          sentiment: "negative",
+          confidence: 0.78,
+          scores: { positive: 0.1, negative: 0.78, neutral: 0.12 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.92,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = analysisResult;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisStatus, "completed");
+      assert.equal(found.analysisResult.overallSentiment, "positive");
+      assert.equal(found.analysisResult.overallConfidence, 0.92);
+      assert.equal(found.analysisResult.aspects.length, 2);
+      assert.equal(found.analysisResult.modelVersion, "absa-v1");
+      assert.equal(found.analysisResult.promptVersion, "1.0");
+
+      // Verify individual aspects
+      const camera = found.analysisResult.aspects.find(
+        (a) => a.aspect === "Camera",
+      );
+      assert.equal(camera.sentiment, "positive");
+      assert.equal(camera.confidence, 0.92);
+
+      const battery = found.analysisResult.aspects.find(
+        (a) => a.aspect === "Battery",
+      );
+      assert.equal(battery.sentiment, "negative");
+    });
+  });
+
+  // --- AI returns missing fields ---
+
+  test("handles analysis result with missing optional fields gracefully", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    // Simulate result with no modelVersion/promptVersion (null)
+    const analysisResult = {
+      aspects: [
+        {
+          aspect: "General",
+          sentiment: "neutral",
+          confidence: 0.6,
+          scores: { positive: 0.2, negative: 0.2, neutral: 0.6 },
+        },
+      ],
+      overallSentiment: "neutral",
+      overallConfidence: 0.6,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: null,
+      promptVersion: null,
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = analysisResult;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisResult.overallSentiment, "neutral");
+      assert.strictEqual(found.analysisResult.modelVersion, null);
+      assert.strictEqual(found.analysisResult.promptVersion, null);
+    });
+  });
+
+  // --- AI failure: analysisStatus = failed ---
+
+  test("failed analysis sets status to failed and keeps analysisResult null", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    review.analysisStatus = "failed";
+    review.analysisResult = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews?productId=prod-iphone-15`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      const found = body.data.find((r) => r.id === "review-1");
+      assert.ok(found);
+      assert.equal(found.analysisStatus, "failed");
+      assert.strictEqual(found.analysisResult, null);
+    });
+  });
+
+  // --- Re-analysis on edit: previousAnalysis preserved ---
+
+  test("PUT /api/reviews/:id preserves old analysis in previousAnalysis when content changes", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const oldAnalysis = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.9,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = oldAnalysis;
+    review.previousAnalysis = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-1`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: "prod-iphone-15",
+            rating: 4,
+            comment: "Updated comment triggers re-analysis",
+            images: [],
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+      // previousAnalysis should hold the old completed result
+      assert.ok(body.data.previousAnalysis);
+      assert.equal(body.data.previousAnalysis.overallSentiment, "positive");
+      assert.equal(body.data.previousAnalysis.aspects.length, 1);
+      assert.equal(body.data.previousAnalysis.modelVersion, "absa-v1");
+    });
+  });
+
+  test("PUT /api/reviews/:id does NOT set previousAnalysis when content unchanged", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    const existingAnalysis = {
+      aspects: [
+        {
+          aspect: "General",
+          sentiment: "positive",
+          confidence: 0.85,
+          scores: { positive: 0.85, negative: 0.1, neutral: 0.05 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.85,
+      analyzedAt: new Date().toISOString(),
+      modelVersion: "absa-v1",
+      promptVersion: "1.0",
+    };
+
+    review.analysisStatus = "completed";
+    review.analysisResult = existingAnalysis;
+    review.previousAnalysis = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/review-1`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            productId: review.productId,
+            rating: review.rating,
+            comment: review.comment,
+            images: review.images,
+          }),
+        },
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.analysisStatus, "completed");
+      assert.ok(body.data.analysisResult);
+      assert.strictEqual(body.data.previousAnalysis, null);
+    });
+  });
+
+  // --- Analysis summary aggregate endpoint ---
+
+  test("GET /api/reviews/product/:productId/analysis-summary returns empty summary for no reviews", async () => {
+    // Remove all reviews for this product
+    db.reviews = db.reviews.filter((r) => r.productId !== "prod-iphone-15");
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.productId, "prod-iphone-15");
+      assert.equal(body.data.totalAnalyzed, 0);
+      assert.deepStrictEqual(body.data.sentimentDistribution, {
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+      });
+      assert.deepStrictEqual(body.data.aspectSummary, []);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary aggregates completed reviews", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    review.analysisStatus = "completed";
+    review.analysisResult = {
+      aspects: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+        {
+          aspect: "Battery",
+          sentiment: "negative",
+          confidence: 0.8,
+          scores: { positive: 0.1, negative: 0.8, neutral: 0.1 },
+        },
+      ],
+      overallSentiment: "positive",
+      overallConfidence: 0.9,
+      analyzedAt: new Date().toISOString(),
+    };
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.productId, "prod-iphone-15");
+      assert.equal(body.data.totalAnalyzed, 1);
+      assert.equal(body.data.sentimentDistribution.positive, 1);
+      assert.equal(body.data.sentimentDistribution.negative, 0);
+      assert.equal(body.data.aspectSummary.length, 2);
+
+      // Aspects sorted by mention count (both have 1, so order may vary)
+      const cameraAspect = body.data.aspectSummary.find(
+        (a) => a.aspect === "Camera",
+      );
+      assert.ok(cameraAspect);
+      assert.equal(cameraAspect.mentionCount, 1);
+      assert.equal(cameraAspect.sentimentCounts.positive, 1);
+      assert.equal(cameraAspect.avgConfidence, 0.9);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary ignores non-completed reviews", async () => {
+    const review = db.reviews.find((r) => r.id === "review-1");
+    assert.ok(review);
+
+    // Set to pending — should not be included in summary
+    review.analysisStatus = "pending";
+    review.analysisResult = null;
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/prod-iphone-15/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 200);
+      assert.equal(body.data.totalAnalyzed, 0);
+      assert.deepStrictEqual(body.data.aspectSummary, []);
+    });
+  });
+
+  test("GET /api/reviews/product/:productId/analysis-summary returns 400 for missing productId", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/product/%20/analysis-summary`,
+      );
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.ok(body.message);
+    });
+  });
+
+  // --- Status tracking: pending -> completed / failed ---
+
+  test("review transitions from none to pending on POST", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Task 23 test: status transitions correctly",
+          images: [],
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 201);
+      assert.equal(body.data.analysisStatus, "pending");
+      assert.strictEqual(body.data.analysisResult, null);
+      assert.strictEqual(body.data.previousAnalysis, null);
+    });
+  });
+});
+
+// ─── Task 23 - AI Analysis Audit Trail ────────────────────────────────────────
+
+describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
+  /** @type {ReturnType<typeof structuredClone>} */
+  let reviewsSnapshot;
+  let productsSnapshot;
+
+  beforeEach(() => {
+    reviewsSnapshot = structuredClone(db.reviews);
+    productsSnapshot = structuredClone(db.products);
+    // Reset analysis state
+    db.reviews.forEach((r) => {
+      r.analysisStatus = "none";
+      r.analysisResult = null;
+      r.previousAnalysis = null;
+    });
+    // Clear any previous logs
+    db.analysisLogs = [];
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    db.reviews = reviewsSnapshot;
+    db.products = productsSnapshot;
+    db.analysisLogs = [];
+  });
+
+  test("successful AI analysis creates audit log entry with correct fields", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "Camera",
+          sentiment: "positive",
+          confidence: 0.9,
+          scores: { positive: 0.9, negative: 0.05, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 5,
+          comment: "Camera tuyet voi, chup anh net",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis to complete
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Verify audit log was created
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "success");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Camera tuyet voi, chup anh net");
+      assert.ok(log.result, "result should be present");
+      assert.ok(log.result.aspects.length > 0, "result should have aspects");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+      assert.ok(log.durationMs >= 0, "durationMs should be non-negative");
+      assert.ok(log.id, "log should have an id");
+      assert.ok(log.createdAt, "log should have createdAt");
+      assert.equal(log.attemptCount, 1);
+      assert.strictEqual(log.error, null);
+    });
+  });
+
+  test("failed AI analysis creates audit log entry with error details", async () => {
+    // Mock fetch to fail
+    mockFetchSequence([
+      { error: new Error("AI service unavailable") },
+      { error: new Error("AI service unavailable") }, // retry
+    ]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 3,
+          comment: "Test failure audit logging",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for fire-and-forget analysis + retries to complete
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      assert.ok(db.analysisLogs.length >= 1, "Expected at least 1 audit log entry");
+
+      const log = db.analysisLogs[db.analysisLogs.length - 1];
+      assert.equal(log.status, "failed");
+      assert.equal(log.productId, "prod-galaxy-s25");
+      assert.ok(log.reviewId, "reviewId should be present");
+      assert.equal(log.inputText, "Test failure audit logging");
+      assert.strictEqual(log.result, null);
+      assert.ok(log.error, "error should be present");
+      assert.ok(log.error.message, "error.message should be present");
+      assert.ok(log.error.code, "error.code should be present");
+      assert.ok(typeof log.durationMs === "number", "durationMs should be a number");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by reviewId", async () => {
+    // Seed audit logs
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good product",
+        status: "success",
+        result: { overallSentiment: "positive" },
+        error: null,
+        durationMs: 150,
+        modelVersion: "absa-v1",
+        promptVersion: "1.0",
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad product",
+        status: "failed",
+        result: null,
+        error: { message: "Timeout", code: "TIMEOUT" },
+        durationMs: 15000,
+        modelVersion: null,
+        promptVersion: null,
+        apiUrl: null,
+        attemptCount: 1,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?reviewId=review-1`,
+        {
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].reviewId, "review-1");
+      assert.equal(body.data[0].status, "success");
+    });
+  });
+
+  test("GET /analysis-logs returns logs filtered by status", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "Good",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 100,
+        createdAt: "2026-03-31T01:00:00.000Z",
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Bad",
+        status: "failed",
+        result: null,
+        error: { message: "Error", code: "TIMEOUT" },
+        durationMs: 15000,
+        createdAt: "2026-03-31T02:00:00.000Z",
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?status=failed`,
+        {
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].status, "failed");
+      assert.equal(body.data[0].reviewId, "review-2");
+    });
+  });
+
+  test("GET /analysis-logs respects limit parameter", async () => {
+    // Seed 5 logs
+    db.analysisLogs = Array.from({ length: 5 }, (_, i) => ({
+      id: `log-${i}`,
+      reviewId: "review-1",
+      productId: "prod-iphone-15",
+      inputText: `Comment ${i}`,
+      status: "success",
+      result: {},
+      error: null,
+      durationMs: 100 + i,
+      createdAt: new Date(Date.now() - i * 60000).toISOString(),
+    }));
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?limit=2`,
+        {
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 2);
+    });
+  });
+
+  test("GET /analysis-logs requires authentication", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+      );
+
+      assert.equal(res.status, 401);
+    });
+  });
+
+  test("GET /analysis-logs returns empty array when no logs exist", async () => {
+    db.analysisLogs = [];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+        {
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.ok(Array.isArray(body.data));
+      assert.equal(body.data.length, 0);
+    });
+  });
+
+  test("GET /analysis-logs filters by productId", async () => {
+    db.analysisLogs = [
+      {
+        id: "log-1",
+        reviewId: "review-1",
+        productId: "prod-iphone-15",
+        inputText: "iPhone review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 120,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "log-2",
+        reviewId: "review-2",
+        productId: "prod-galaxy-s25",
+        inputText: "Samsung review",
+        status: "success",
+        result: {},
+        error: null,
+        durationMs: 130,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs?productId=prod-iphone-15`,
+        {
+          headers: { Authorization: "Bearer admin-token" },
+        },
+      );
+
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.equal(body.data[0].productId, "prod-iphone-15");
+    });
+  });
+
+  test("audit log records modelVersion and promptVersion on success", async () => {
+    const aiResponse = {
+      results: [
+        {
+          aspect: "General",
+          sentiment: "positive",
+          confidence: 0.85,
+          scores: { positive: 0.85, negative: 0.1, neutral: 0.05 },
+        },
+      ],
+    };
+
+    mockFetchSequence([{ body: aiResponse, status: 200 }]);
+
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/reviews`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: "prod-galaxy-s25",
+          rating: 4,
+          comment: "San pham tot, dang mua",
+          images: [],
+        }),
+      });
+
+      assert.equal(res.status, 201);
+
+      // Wait for analysis
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const log = db.analysisLogs.find((l) => l.status === "success");
+      assert.ok(log, "Expected a success log entry");
+      assert.equal(log.modelVersion, "absa-v1");
+      assert.equal(log.promptVersion, "1.0");
+    });
   });
 });

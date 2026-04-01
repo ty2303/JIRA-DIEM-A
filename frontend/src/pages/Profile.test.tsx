@@ -260,6 +260,8 @@ describe('Profile order history summary', () => {
     );
 
     expect(await screen.findByText('Nguyen Van A')).toBeInTheDocument();
-    expect(screen.getByText('123 Nguyen Hue, Ben Nghe, Quan 1, TP. Ho Chi Minh')).toBeInTheDocument();
+    expect(
+      screen.getByText('123 Nguyen Hue, Ben Nghe, Quan 1, TP. Ho Chi Minh'),
+    ).toBeInTheDocument();
   });
 });

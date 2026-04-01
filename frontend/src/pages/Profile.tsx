@@ -115,7 +115,7 @@ function Profile() {
   const cancelOrderInStore = useOrderStore((s) => s.cancelOrder);
   const [expandedId, setExpandedId] = useState<string | null>(
     locationState?.tab === 'orders'
-      ? locationState.expandedOrderId ?? null
+      ? (locationState.expandedOrderId ?? null)
       : null,
   );
 
@@ -743,7 +743,11 @@ function Profile() {
                                     <span
                                       className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_STATUS_COLOR[order.paymentStatus]}`}
                                     >
-                                      {PAYMENT_STATUS_LABEL[order.paymentStatus]}
+                                      {
+                                        PAYMENT_STATUS_LABEL[
+                                          order.paymentStatus
+                                        ]
+                                      }
                                     </span>
                                   </div>
                                 )}

@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import express from "express";
 import { createOrder, db, paginate, restoreReservedStockForOrder } from "../data/store.js";
+import { isDatabaseReady } from "../data/mongodb.js";
 import { fail, ok } from "../lib/apiResponse.js";
-import { calculateOrderPricing } from "../lib/orderPricing.js";
+import { calculateOrderPricingFromProducts } from "../lib/orderPricing.js";
 import { serializeOrder } from "../lib/catalogSerializers.js";
 import {
   MomoConfigError,
@@ -19,6 +20,7 @@ import {
   applyMomoPaymentResult,
   cancelMomoPendingOrder,
   MOMO_PENDING_RESULT_CODES,
+  restoreMongoStockSafely,
 } from "../services/momoPaymentService.js";
 
 export const ordersRouter = express.Router();
@@ -45,7 +47,7 @@ function validateOrderPayload(payload, paymentMethod) {
   }
 
   for (const item of items) {
-    if (!item.productId || !item.productName || item.price == null || !item.quantity || item.quantity < 1) {
+    if (!item.productId || !Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1) {
       return "Thông tin sản phẩm không hợp lệ";
     }
   }
@@ -53,11 +55,44 @@ function validateOrderPayload(payload, paymentMethod) {
   return null;
 }
 
-async function ensureProductsAvailable(items) {
-  for (const item of items) {
-    const product = await Product.findById(item.productId);
+async function loadMongoProductsById(items) {
+  const productIds = [...new Set(items.map((item) => String(item.productId).trim()))];
+  const products = await Product.find({ _id: { $in: productIds } }).lean();
+  return new Map(products.map((product) => [product._id, product]));
+}
+
+function buildTrustedOrderItems(items, productsById) {
+  return items.map((item) => {
+    const product = productsById.get(item.productId);
+
     if (!product) {
-      throw { status: 404, message: `Sản phẩm "${item.productName}" không tồn tại` };
+      throw {
+        status: 404,
+        message: `Sản phẩm "${item.productName ?? item.productId}" không tồn tại`,
+      };
+    }
+
+    return {
+      productId: product._id,
+      productName: product.name,
+      productImage: product.image ?? "",
+      brand: product.brand ?? "",
+      price: product.price,
+      quantity: Number(item.quantity),
+    };
+  });
+}
+
+async function ensureProductsAvailable(items, productsById = null) {
+  const resolvedProductsById = productsById ?? (await loadMongoProductsById(items));
+
+  for (const item of items) {
+    const product = resolvedProductsById.get(item.productId);
+    if (!product) {
+      throw {
+        status: 404,
+        message: `Sản phẩm "${item.productName ?? item.productId}" không tồn tại`,
+      };
     }
     if (product.stock < item.quantity) {
       throw {
@@ -66,6 +101,8 @@ async function ensureProductsAvailable(items) {
       };
     }
   }
+
+  return resolvedProductsById;
 }
 
 async function updateMongoStock(items, delta) {
@@ -75,6 +112,58 @@ async function updateMongoStock(items, delta) {
       updatedAt: new Date(),
     });
   }
+}
+
+async function rollbackMongoStockRestore(items) {
+  await updateMongoStock(items, -1);
+}
+
+async function reserveMongoStock(items) {
+  const reservedItems = [];
+
+  try {
+    for (const item of items) {
+      const reserved = await Product.findOneAndUpdate(
+        {
+          _id: item.productId,
+          stock: { $gte: item.quantity },
+        },
+        {
+          $inc: { stock: -item.quantity },
+          updatedAt: new Date(),
+        },
+        { new: true },
+      );
+
+      if (!reserved) {
+        const product = await Product.findById(item.productId).lean();
+        throw {
+          status: 409,
+          message: `Sản phẩm "${item.productName}" không đủ hàng (còn ${product?.stock ?? 0})`,
+        };
+      }
+
+      reservedItems.push(item);
+    }
+  } catch (error) {
+    if (reservedItems.length > 0) {
+      await updateMongoStock(reservedItems, 1);
+    }
+
+    throw error;
+  }
+}
+
+async function loadStoredOrder(orderId) {
+  try {
+    const mongoOrder = await Order.findById(orderId).lean();
+    if (mongoOrder) {
+      return mongoOrder;
+    }
+  } catch {
+  }
+
+  return db.orders.find((item) => item.id === orderId) ?? null;
 }
 
 function removeMemoryOrder(orderId) {
@@ -161,6 +250,10 @@ ordersRouter.get("/:id", requireAuth, async (req, res) => {
 
     return res.json(ok(serializeOrder(order)));
   } catch {
+    if (isDatabaseReady()) {
+      return res.status(500).json(fail("Không thể cập nhật trạng thái đơn hàng", 500));
+    }
+
     const memOrder = db.orders.find((item) => item.id === req.params.id);
     if (!memOrder) {
       return res.status(404).json(fail("Không tìm thấy đơn hàng", 404));
@@ -185,7 +278,6 @@ ordersRouter.post("/", requireAuth, async (req, res) => {
     paymentMethod,
     items,
     note,
-    discount,
   } = req.body;
 
   if (!email || !customerName || !phone || !address || !city || !district || !ward || !paymentMethod) {
@@ -201,51 +293,51 @@ ordersRouter.post("/", requireAuth, async (req, res) => {
   }
 
   for (const item of items) {
-    if (!item.productId || !item.productName || item.price == null || !item.quantity || item.quantity < 1) {
+    if (!item.productId || !Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1) {
       return res.status(400).json(fail("Thông tin sản phẩm không hợp lệ", 400));
     }
   }
 
   try {
-    for (const item of items) {
-      const product = await Product.findById(item.productId);
-      if (!product) {
-        return res.status(404).json(fail(`Sản phẩm "${item.productName}" không tồn tại`, 404));
-      }
-      if (product.stock < item.quantity) {
-        return res
-          .status(409)
-          .json(fail(`Sản phẩm "${product.name}" không đủ hàng (còn ${product.stock})`, 409));
-      }
-    }
-
-    const pricing = calculateOrderPricing(items, { discount });
-
-    const order = await Order.create({
-      userId: req.user.id,
-      email,
-      customerName,
-      phone,
-      address,
-      city,
-      district,
-      ward,
-      note: note ?? "",
-      paymentMethod,
-      items,
-      ...pricing,
-      paymentStatus: "UNPAID",
+    const productsById = await ensureProductsAvailable(items);
+    const trustedItems = buildTrustedOrderItems(items, productsById);
+    const pricing = calculateOrderPricingFromProducts(trustedItems, productsById, {
+      discount: 0,
     });
 
-    for (const item of items) {
-      await Product.findByIdAndUpdate(item.productId, {
-        $inc: { stock: -item.quantity },
-        updatedAt: new Date(),
+    await reserveMongoStock(trustedItems);
+
+    try {
+      const order = await Order.create({
+        userId: req.user.id,
+        email,
+        customerName,
+        phone,
+        address,
+        city,
+        district,
+        ward,
+        note: note ?? "",
+        paymentMethod,
+        items: trustedItems,
+        ...pricing,
+        paymentStatus: "UNPAID",
       });
+
+      return res.status(201).json(ok(serializeOrder(order.toObject()), "Đặt hàng thành công", 201));
+    } catch (mongoOrderError) {
+      await updateMongoStock(trustedItems, 1);
+      throw mongoOrderError;
+    }
+  } catch (error) {
+    if (error?.status && error?.message) {
+      return res.status(error.status).json(fail(error.message, error.status));
     }
 
-    return res.status(201).json(ok(serializeOrder(order.toObject()), "Đặt hàng thành công", 201));
-  } catch {
+    if (isDatabaseReady()) {
+      return res.status(500).json(fail("Đặt hàng thất bại", 500));
+    }
+
     try {
       const order = createOrder(req.body, req.user);
       return res.status(201).json(ok(order, "Đặt hàng thành công", 201));
@@ -278,35 +370,42 @@ ordersRouter.post("/momo/init", requireAuth, async (req, res) => {
     ward,
     items,
     note,
-    discount,
   } = req.body;
 
-  const pricing = calculateOrderPricing(items, { discount });
-
   try {
-    await ensureProductsAvailable(items);
+    const productsById = await ensureProductsAvailable(items);
+    const trustedItems = buildTrustedOrderItems(items, productsById);
+    const pricing = calculateOrderPricingFromProducts(trustedItems, productsById, {
+      discount: 0,
+    });
+    await reserveMongoStock(trustedItems);
 
     const orderId = crypto.randomUUID();
-    const createdOrder = await Order.create({
-      _id: orderId,
-      userId: req.user.id,
-      email,
-      customerName,
-      phone,
-      address,
-      city,
-      district,
-      ward,
-      note: note ?? "",
-      paymentMethod,
-      items,
-      ...pricing,
-      paymentStatus: "PENDING",
-      momoRequestId: null,
-      momoTransactionId: null,
-    });
+    let createdOrder;
 
-    await updateMongoStock(items, -1);
+    try {
+      createdOrder = await Order.create({
+        _id: orderId,
+        userId: req.user.id,
+        email,
+        customerName,
+        phone,
+        address,
+        city,
+        district,
+        ward,
+        note: note ?? "",
+        paymentMethod,
+        items: trustedItems,
+        ...pricing,
+        paymentStatus: "PENDING",
+        momoRequestId: null,
+        momoTransactionId: null,
+      });
+    } catch (mongoOrderError) {
+      await updateMongoStock(trustedItems, 1);
+      throw mongoOrderError;
+    }
 
     try {
         const payment = await createMomoPayment({
@@ -333,7 +432,7 @@ ordersRouter.post("/momo/init", requireAuth, async (req, res) => {
         ),
       );
     } catch (error) {
-      await updateMongoStock(items, 1);
+      await updateMongoStock(trustedItems, 1);
       await Order.findByIdAndDelete(orderId);
       throw error;
     }
@@ -344,6 +443,10 @@ ordersRouter.post("/momo/init", requireAuth, async (req, res) => {
 
     if (error?.status && error?.message) {
       return res.status(error.status).json(fail(error.message, error.status));
+    }
+
+    if (isDatabaseReady()) {
+      return res.status(500).json(fail("Khởi tạo thanh toán MoMo thất bại", 500));
     }
 
     try {
@@ -497,9 +600,14 @@ ordersRouter.post("/momo/ipn", express.json(), async (req, res) => {
       return res.status(400).json(fail("Thiếu thông tin kết quả thanh toán MoMo", 400));
     }
 
-  if (!verifyMomoCallbackSignature(req.body)) {
-    return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
-  }
+    if (!verifyMomoCallbackSignature(req.body)) {
+      return res.status(400).json(fail("Chữ ký MoMo không hợp lệ", 400));
+    }
+
+    const order = await loadStoredOrder(orderId);
+    if (order && Number(order.total) !== amount) {
+      return res.status(400).json(fail("Số tiền thanh toán MoMo không khớp với đơn hàng", 400));
+    }
 
     await applyMomoPaymentResult({ orderId, resultCode, transId, requestId });
     return res.status(204).end();
@@ -550,6 +658,10 @@ ordersRouter.patch("/:id/status", requireAdmin, async (req, res) => {
     });
     return res.json(ok(serializeOrder(order), "Cập nhật trạng thái thành công"));
   } catch {
+    if (isDatabaseReady()) {
+      return res.status(500).json(fail("Không thể cập nhật trạng thái đơn hàng", 500));
+    }
+
     const memOrder = db.orders.find((item) => item.id === req.params.id);
     if (!memOrder) {
       return res.status(404).json(fail("Không tìm thấy đơn hàng", 404));
@@ -630,21 +742,31 @@ ordersRouter.patch("/:id/cancel", requireAuth, async (req, res) => {
       return res.json(ok(serializeOrder(momoCancelResult.order), "Hủy đơn hàng thành công"));
     }
 
-    const updated = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status: "CANCELLED", cancelReason, cancelledBy, paymentStatus: "FAILED" },
-      { new: true }
-    ).lean();
+    await restoreMongoStockSafely(order);
 
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.productId, {
-        $inc: { stock: item.quantity },
-        updatedAt: new Date(),
-      });
+    let updated;
+
+    try {
+      updated = await Order.findByIdAndUpdate(
+        req.params.id,
+        { status: "CANCELLED", cancelReason, cancelledBy, paymentStatus: "FAILED" },
+        { new: true }
+      ).lean();
+
+      if (!updated) {
+        throw new Error("Không thể cập nhật trạng thái hủy đơn hàng");
+      }
+    } catch (error) {
+      await rollbackMongoStockRestore(order.items);
+      throw error;
     }
 
     return res.json(ok(serializeOrder(updated), "Hủy đơn hàng thành công"));
   } catch {
+    if (isDatabaseReady()) {
+      return res.status(500).json(fail("Không thể hủy đơn hàng", 500));
+    }
+
     const memOrder = db.orders.find((item) => item.id === req.params.id);
     if (!memOrder) {
       return res.status(404).json(fail("Không tìm thấy đơn hàng", 404));

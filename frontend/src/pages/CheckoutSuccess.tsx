@@ -58,8 +58,9 @@ function getPaymentStatusLabel(paymentStatus?: string, paymentMethod?: string) {
   }
 
   return paymentStatus
-    ? PAYMENT_STATUS_LABEL[paymentStatus as keyof typeof PAYMENT_STATUS_LABEL] ??
-        paymentStatus
+    ? (PAYMENT_STATUS_LABEL[
+        paymentStatus as keyof typeof PAYMENT_STATUS_LABEL
+      ] ?? paymentStatus)
     : 'Chưa cập nhật';
 }
 
@@ -126,7 +127,12 @@ function getCheckoutPageState(
       return 'cancelled';
     }
 
-    if (resultCode === 0 || resultCode === 1000 || resultCode === 7000 || resultCode === 7002) {
+    if (
+      resultCode === 0 ||
+      resultCode === 1000 ||
+      resultCode === 7000 ||
+      resultCode === 7002
+    ) {
       return 'pending';
     }
 
@@ -199,7 +205,9 @@ function CheckoutSuccess() {
   const resultCode = parseResultCode(searchParams.get('resultCode'));
   const order = currentOrder?.id === orderId ? currentOrder : null;
   const effectivePaymentMethod =
-    order?.paymentMethod ?? pendingCheckout?.paymentMethod ?? queryPaymentMethod;
+    order?.paymentMethod ??
+    pendingCheckout?.paymentMethod ??
+    queryPaymentMethod;
   const currentCartSignature = buildCheckoutCartSignature(
     cartItems.map(({ product, quantity }) => ({
       productId: product.id,
@@ -301,9 +309,9 @@ function CheckoutSuccess() {
       ? 'bg-green-100 ring-green-50'
       : pageState === 'cancelled'
         ? 'bg-slate-100 ring-slate-50'
-      : pageState === 'failure'
-        ? 'bg-red-100 ring-red-50'
-        : 'bg-amber-100 ring-amber-50';
+        : pageState === 'failure'
+          ? 'bg-red-100 ring-red-50'
+          : 'bg-amber-100 ring-amber-50';
 
   const heroTitle =
     pageState === 'success'
@@ -312,9 +320,9 @@ function CheckoutSuccess() {
         : 'Đặt hàng thành công!'
       : pageState === 'cancelled'
         ? 'Giao dịch đã bị hủy'
-      : pageState === 'failure'
-        ? 'Thanh toán chưa hoàn tất'
-        : 'Đang chờ xác nhận thanh toán';
+        : pageState === 'failure'
+          ? 'Thanh toán chưa hoàn tất'
+          : 'Đang chờ xác nhận thanh toán';
 
   const heroDescription =
     pageState === 'success'
@@ -323,18 +331,18 @@ function CheckoutSuccess() {
         : `Đơn hàng #${shortOrderId} đã được ghi nhận. Bạn sẽ thanh toán khi nhận hàng.`
       : pageState === 'cancelled'
         ? `Đơn hàng #${shortOrderId} hiện ở trạng thái đã hủy. Nếu đây là giao dịch MoMo, giỏ hàng của bạn vẫn được giữ lại để thử lại khi cần.`
-      : pageState === 'failure'
-        ? `Đơn hàng #${shortOrderId} chưa thanh toán thành công qua MoMo. Giỏ hàng vẫn được giữ lại để bạn có thể thử lại.`
-        : `Đơn hàng #${shortOrderId} đã được tạo và đang chờ MoMo hoặc hệ thống xác nhận kết quả thanh toán.`;
+        : pageState === 'failure'
+          ? `Đơn hàng #${shortOrderId} chưa thanh toán thành công qua MoMo. Giỏ hàng vẫn được giữ lại để bạn có thể thử lại.`
+          : `Đơn hàng #${shortOrderId} đã được tạo và đang chờ MoMo hoặc hệ thống xác nhận kết quả thanh toán.`;
 
   const helperMessage =
     pageState === 'success'
       ? 'Chúng tôi sẽ xác nhận đơn, chuẩn bị hàng và cập nhật trạng thái sớm nhất cho bạn.'
       : pageState === 'cancelled'
         ? 'Nếu bạn hủy giao dịch trên MoMo hoặc đơn hàng đã bị hủy, bạn vẫn có thể xem lại lịch sử đơn hàng và bắt đầu lại khi sẵn sàng.'
-      : pageState === 'failure'
-        ? 'Nếu bạn đóng tab hoặc quay lại giữa chừng, bạn vẫn có thể theo dõi trạng thái đơn hàng rồi thanh toán lại khi cần.'
-        : 'Nếu bạn vừa quay lại từ MoMo, hệ thống có thể cần thêm ít phút để đồng bộ. Chúng tôi chỉ làm trống giỏ hàng sau khi thanh toán được xác nhận.';
+        : pageState === 'failure'
+          ? 'Nếu bạn đóng tab hoặc quay lại giữa chừng, bạn vẫn có thể theo dõi trạng thái đơn hàng rồi thanh toán lại khi cần.'
+          : 'Nếu bạn vừa quay lại từ MoMo, hệ thống có thể cần thêm ít phút để đồng bộ. Chúng tôi chỉ làm trống giỏ hàng sau khi thanh toán được xác nhận.';
 
   const defaultSystemMessage =
     pageState === 'success'
@@ -343,14 +351,14 @@ function CheckoutSuccess() {
         : 'Đơn hàng COD đã được tạo thành công và đang chờ xác nhận.'
       : pageState === 'cancelled'
         ? 'Giao dịch đã bị hủy hoặc đơn hàng đã được đánh dấu hủy. Bạn có thể xem lại chi tiết đơn hàng hoặc thử thanh toán lại.'
-      : pageState === 'failure'
-        ? 'MoMo chưa xác nhận thanh toán thành công cho đơn hàng này.'
-        : 'Hệ thống đã nhận đơn hàng nhưng vẫn đang chờ kết quả thanh toán cuối cùng.';
+        : pageState === 'failure'
+          ? 'MoMo chưa xác nhận thanh toán thành công cho đơn hàng này.'
+          : 'Hệ thống đã nhận đơn hàng nhưng vẫn đang chờ kết quả thanh toán cuối cùng.';
 
   const systemMessage =
     order?.status === 'CANCELLED' && order.cancelReason
       ? `Đơn hàng đã được hủy: ${order.cancelReason}`
-      : queryMessage ?? defaultSystemMessage;
+      : (queryMessage ?? defaultSystemMessage);
 
   const secondaryMessage =
     queryMessage && queryMessage !== systemMessage ? queryMessage : undefined;
@@ -478,7 +486,9 @@ function CheckoutSuccess() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em]">
               Thông báo hệ thống
             </p>
-            <p className="mt-2 text-sm font-medium leading-6">{systemMessage}</p>
+            <p className="mt-2 text-sm font-medium leading-6">
+              {systemMessage}
+            </p>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs opacity-90">
               {effectivePaymentMethod && (
                 <span>
