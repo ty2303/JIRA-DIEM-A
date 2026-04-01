@@ -1,12 +1,14 @@
-import { Pencil, Star } from 'lucide-react';
+import { Bot, Loader2, Pencil, Sparkles, Star } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import apiClient from '@/api/client';
 import { ENDPOINTS } from '@/api/endpoints';
 import { useAuthStore } from '@/store/useAuthStore';
-import type { Review } from '@/types/review';
+import type { ApiResponse } from '@/api/types';
+import type { ProductReviewAnalysisSummary, Review } from '@/types/review';
 import { getAverageRating } from '@/utils/rating';
 
+import AISentimentSummary from './AISentimentSummary';
 import ProductReviewCard from './ProductReviewCard';
 import ProductReviewForm from './ProductReviewForm';
 import ReviewLoginCTA from './ReviewLoginCTA';
@@ -32,6 +34,11 @@ export default function ProductReviewSection({
 
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [analysisSummary, setAnalysisSummary] =
+    useState<ProductReviewAnalysisSummary | null>(null);
+  const [analysisSummaryStatus, setAnalysisSummaryStatus] = useState<
+    'idle' | 'loading' | 'success' | 'error'
+  >('idle');
 
   /* --- poll for pending analysis results --- */
   const hasPending = useMemo(
@@ -85,8 +92,31 @@ export default function ProductReviewSection({
     () => reviews.find((r) => r.userId === user?.id) ?? null,
     [reviews, user?.id],
   );
+  const reviewAnalysisSignature = useMemo(
+    () =>
+      reviews
+        .map((review) =>
+          [
+            review.id,
+            review.analysisStatus,
+            review.updatedAt ?? review.createdAt,
+            review.comment,
+          ].join(':'),
+        )
+        .join('|'),
+    [reviews],
+  );
   const isEditing = editingReview !== null;
   const showForm = isLoggedIn && !isAdmin && (!myReview || isEditing);
+  const pendingAnalysisCount = useMemo(
+    () => reviews.filter((review) => review.analysisStatus === 'pending').length,
+    [reviews],
+  );
+  const hasPendingAnalysis = pendingAnalysisCount > 0;
+  const hasCompletedAnalysis = useMemo(
+    () => reviews.some((review) => review.analysisStatus === 'completed'),
+    [reviews],
+  );
 
   const reviewDistribution = useMemo(
     () =>
@@ -97,6 +127,66 @@ export default function ProductReviewSection({
       }),
     [reviews],
   );
+
+  useEffect(() => {
+    let isCancelled = false;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const fetchAnalysisSummary = async (attempt = 0) => {
+      if (reviews.length === 0) {
+        setAnalysisSummary(null);
+        setAnalysisSummaryStatus('idle');
+        return;
+      }
+
+      if (attempt === 0) {
+        setAnalysisSummary(null);
+      }
+
+      setAnalysisSummaryStatus('loading');
+
+      try {
+        const response = await apiClient.get<
+          ApiResponse<ProductReviewAnalysisSummary>
+        >(ENDPOINTS.REVIEWS.ANALYSIS_SUMMARY(productId));
+
+        if (isCancelled) {
+          return;
+        }
+
+        const nextSummary = response.data.data;
+        setAnalysisSummary(nextSummary);
+
+        const shouldRetryForLaggingSummary =
+          nextSummary.totalAnalyzed === 0 && hasCompletedAnalysis && attempt < 2;
+
+        if (shouldRetryForLaggingSummary) {
+          retryTimeout = setTimeout(() => {
+            void fetchAnalysisSummary(attempt + 1);
+          }, 1500);
+          return;
+        }
+
+        setAnalysisSummaryStatus('success');
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+
+        setAnalysisSummary(null);
+        setAnalysisSummaryStatus('error');
+      }
+    };
+
+    void fetchAnalysisSummary();
+
+    return () => {
+      isCancelled = true;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+    };
+  }, [productId, reviewAnalysisSignature, reviews.length, hasCompletedAnalysis]);
 
   /* --- handlers --- */
   const handleEdit = useCallback((review: Review) => {
@@ -150,6 +240,116 @@ export default function ProductReviewSection({
     [reviews, editingReview, onReviewsChange],
   );
 
+  const showAiLoadingCard =
+    !analysisSummary?.totalAnalyzed &&
+    reviews.length > 0 &&
+    analysisSummaryStatus === 'loading' &&
+    (hasPendingAnalysis || hasCompletedAnalysis);
+
+  const renderAiSummaryCard = () => {
+    if (analysisSummary && analysisSummary.totalAnalyzed > 0) {
+      return <AISentimentSummary summary={analysisSummary} />;
+    }
+
+    if (showAiLoadingCard) {
+      return (
+        <div className="rounded-[1.75rem] border border-brand/10 bg-gradient-to-br from-brand-subtle via-surface to-surface-alt p-6 shadow-sm">
+          <div className="inline-flex items-center gap-2 rounded-full border border-brand/10 bg-surface/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand-accent">
+            <Bot className="h-3.5 w-3.5" />
+            AI review signal
+          </div>
+          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-border bg-surface/85 px-4 py-4">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-brand-accent" />
+            <div>
+              <h3 className="font-display text-xl font-bold text-brand">
+                Tổng quan cảm xúc AI
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-text-secondary">
+                AI đang tổng hợp tín hiệu từ các đánh giá gần nhất. Thẻ này sẽ tự
+                cập nhật ngay khi có đủ dữ liệu phân tích.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (reviews.length === 0) {
+      return (
+        <div className="rounded-[1.75rem] border border-border bg-surface p-6">
+          <div className="flex items-start gap-3">
+            <Bot className="mt-0.5 h-5 w-5 shrink-0 text-text-muted" />
+            <div>
+              <h3 className="font-display text-xl font-bold text-brand">
+                Tổng quan cảm xúc AI
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-text-secondary">
+                Chưa có dữ liệu để AI tổng hợp. Thẻ này sẽ xuất hiện sau khi sản
+                phẩm có đánh giá và hệ thống hoàn tất phân tích nội dung.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (hasPendingAnalysis) {
+      return (
+        <div className="rounded-[1.75rem] border border-border bg-surface p-6">
+          <div className="flex items-start gap-3">
+            <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-brand-accent" />
+            <div>
+              <h3 className="font-display text-xl font-bold text-brand">
+                Tổng quan cảm xúc AI
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-text-secondary">
+                {pendingAnalysisCount} đánh giá đang chờ AI xử lý. Thẻ tổng hợp
+                sẽ hiển thị ngay khi hệ thống hoàn tất những phân tích đầu tiên.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (analysisSummaryStatus === 'error') {
+      return (
+        <div className="rounded-[1.75rem] border border-border bg-surface p-6">
+          <div className="flex items-start gap-3">
+            <Bot className="mt-0.5 h-5 w-5 shrink-0 text-text-muted" />
+            <div>
+              <h3 className="font-display text-xl font-bold text-brand">
+                Tổng quan cảm xúc AI
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-text-secondary">
+                Chưa thể tải dữ liệu tổng hợp AI vào lúc này. Phần đánh giá sao
+                vẫn hiển thị bình thường và thẻ AI sẽ xuất hiện khi tải lại được
+                dữ liệu phân tích.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-[1.75rem] border border-border bg-surface p-6">
+        <div className="flex items-start gap-3">
+          <Bot className="mt-0.5 h-5 w-5 shrink-0 text-text-muted" />
+          <div>
+            <h3 className="font-display text-xl font-bold text-brand">
+              Tổng quan cảm xúc AI
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-text-secondary">
+              Hệ thống chưa có đủ dữ liệu phân tích để tạo bản tổng hợp cảm xúc
+              cho sản phẩm này.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <section className="mt-20 grid gap-8 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
       {/* ===== LEFT: Summary ===== */}
@@ -193,6 +393,8 @@ export default function ProductReviewSection({
             ))}
           </div>
         </div>
+
+        {renderAiSummaryCard()}
       </div>
 
       {/* ===== RIGHT: Form + List ===== */}

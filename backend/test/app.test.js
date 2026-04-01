@@ -703,6 +703,56 @@ describe("Products", () => {
       assert.ok(body.data.content.some((p) => p.name.includes("iPhone")));
     });
   });
+
+  test("POST /api/products rejects a product with an unknown category", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/products`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "Invalid Category Phone",
+          brand: "Test",
+          categoryId: "cat-missing",
+          price: 1000000,
+          image: "https://example.com/invalid-phone.jpg",
+          stock: 1,
+        }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.match(body.message, /Danh muc khong ton tai/i);
+    });
+  });
+
+  test("POST /api/products/batch rejects products with an unknown category", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/products/batch`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify([
+          {
+            name: "Invalid Batch Phone",
+            brand: "Test",
+            categoryId: "cat-missing",
+            price: 1000000,
+            image: "https://example.com/invalid-batch-phone.jpg",
+            stock: 1,
+          },
+        ]),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 400);
+      assert.match(body.message, /Danh muc khong ton tai/i);
+    });
+  });
 });
 
 // =============================================================================
@@ -721,6 +771,107 @@ describe("Categories", () => {
       assert.ok(body.data[0].name);
       assert.ok(body.data[0].slug);
     });
+  });
+
+  test("DELETE /api/categories/:id rejects deleting categories that still have products without force", async () => {
+    const category = {
+      id: `cat-temp-${Date.now()}`,
+      name: "Danh muc tam",
+      slug: "danh-muc-tam",
+      description: "",
+      icon: "Smartphone",
+      createdAt: new Date().toISOString(),
+    };
+    const product = {
+      id: `prod-temp-${Date.now()}`,
+      name: "San pham tam",
+      brand: "Test",
+      categoryId: category.id,
+      price: 1000000,
+      originalPrice: 1200000,
+      image: "https://example.com/temp-product.jpg",
+      rating: 0,
+      badge: "",
+      specs: "",
+      stock: 5,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.categories.push(category);
+    db.products.push(product);
+
+    try {
+      await withServer(async (port) => {
+        const res = await fetch(
+          `http://127.0.0.1:${port}/api/categories/${category.id}`,
+          {
+            method: "DELETE",
+            headers: { Authorization: "Bearer admin-token" },
+          },
+        );
+        const body = await res.json();
+
+        assert.equal(res.status, 409);
+        assert.match(body.message, /force=true/i);
+      });
+    } finally {
+      db.products = db.products.filter((item) => item.id !== product.id);
+      db.categories = db.categories.filter((item) => item.id !== category.id);
+    }
+  });
+
+  test("DELETE /api/categories/:id force deletes the category and unlinks products", async () => {
+    const category = {
+      id: `cat-force-${Date.now()}`,
+      name: "Danh muc force",
+      slug: "danh-muc-force",
+      description: "",
+      icon: "Smartphone",
+      createdAt: new Date().toISOString(),
+    };
+    const product = {
+      id: `prod-force-${Date.now()}`,
+      name: "San pham force",
+      brand: "Test",
+      categoryId: category.id,
+      price: 1500000,
+      originalPrice: 1700000,
+      image: "https://example.com/force-product.jpg",
+      rating: 0,
+      badge: "",
+      specs: "",
+      stock: 3,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.categories.push(category);
+    db.products.push(product);
+
+    try {
+      await withServer(async (port) => {
+        const res = await fetch(
+          `http://127.0.0.1:${port}/api/categories/${category.id}?force=true`,
+          {
+            method: "DELETE",
+            headers: { Authorization: "Bearer admin-token" },
+          },
+        );
+
+        assert.equal(res.status, 200);
+        assert.equal(
+          db.categories.some((item) => item.id === category.id),
+          false,
+        );
+
+        const unlinkedProduct = db.products.find((item) => item.id === product.id);
+        assert.equal(unlinkedProduct?.categoryId, undefined);
+      });
+    } finally {
+      db.products = db.products.filter((item) => item.id !== product.id);
+      db.categories = db.categories.filter((item) => item.id !== category.id);
+    }
   });
 });
 
@@ -873,10 +1024,10 @@ describe("Order pricing", () => {
       const body = await response.json();
 
       assert.equal(response.status, 201);
-      assert.equal(body.data.subtotal, 100000);
-      assert.equal(body.data.shippingFee, 30000);
-      assert.equal(body.data.discount, 50000);
-      assert.equal(body.data.total, 80000);
+      assert.equal(body.data.subtotal, 27990000);
+      assert.equal(body.data.shippingFee, 0);
+      assert.equal(body.data.discount, 0);
+      assert.equal(body.data.total, 27990000);
       assert.equal(body.data.paymentStatus, "UNPAID");
       assert.equal(body.data.paymentMethod, "COD");
 
@@ -916,10 +1067,10 @@ describe("Order pricing", () => {
       const body = await response.json();
 
       assert.equal(response.status, 201);
-      assert.equal(body.data.subtotal, 500000);
+      assert.equal(body.data.subtotal, 27990000);
       assert.equal(body.data.shippingFee, 0);
       assert.equal(body.data.discount, 0);
-      assert.equal(body.data.total, 500000);
+      assert.equal(body.data.total, 27990000);
 
       db.orders = db.orders.filter((o) => o.id !== body.data.id);
     });
@@ -1093,7 +1244,7 @@ describe("Order pricing", () => {
       const requestBody = JSON.parse(momoRequest.body);
       assert.equal(requestBody.partnerCode, "MOMO_PARTNER");
       assert.equal(requestBody.requestType, "captureWallet");
-      assert.equal(requestBody.amount, "120000");
+      assert.equal(requestBody.amount, String(body.data.order.total));
       assert.equal(requestBody.orderId, body.data.order.id);
       assert.ok(requestBody.signature);
 
@@ -1221,7 +1372,7 @@ describe("Order pricing", () => {
         partnerCode: "MOMO_PARTNER",
         orderId,
         requestId: createBody.data.payment.requestId,
-        amount: "130000",
+        amount: String(createBody.data.order.total),
         orderInfo: `Thanh toan don hang ${orderId}`,
         orderType: "momo_wallet",
         transId: "70000001",
@@ -1252,6 +1403,101 @@ describe("Order pricing", () => {
       assert.equal(order?.paymentStatus, "PAID");
       assert.equal(order?.momoTransactionId, "70000001");
       assert.ok(order?.paidAt);
+
+      removeTestOrder(orderId);
+    });
+  });
+
+  test("POST /api/orders/momo/ipn rejects amount mismatches", async () => {
+    await withServer(async (port) => {
+      process.env.MOMO_API_URL =
+        "https://test-payment.momo.vn/v2/gateway/api/create";
+      process.env.MOMO_PARTNER_CODE = "MOMO_PARTNER";
+      process.env.MOMO_ACCESS_KEY = "MOMO_ACCESS";
+      process.env.MOMO_SECRET_KEY = "MOMO_SECRET";
+      process.env.MOMO_REDIRECT_URL = "http://localhost:5173/checkout/success";
+      process.env.MOMO_IPN_URL = "http://localhost:8080/api/orders/momo/ipn";
+
+      mockFetchSequence([
+        {
+          status: 200,
+          body: {
+            resultCode: 0,
+            message: "Success",
+            requestId: "momo-request-paid-mismatch",
+            payUrl: "https://momo.test/pay",
+          },
+        },
+      ]);
+
+      const createResponse = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/init`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer demo-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: "demo@example.com",
+            customerName: "Demo User",
+            phone: "0900000001",
+            address: "123 Duong Nguyen Hue",
+            city: "TP.HCM",
+            district: "Quan 1",
+            ward: "Ben Nghe",
+            paymentMethod: "MOMO",
+            items: [
+              {
+                productId: "prod-iphone-15",
+                productName: "iPhone 15 Pro",
+                productImage: "",
+                brand: "Apple",
+                price: 100000,
+                quantity: 1,
+              },
+            ],
+          }),
+        },
+      );
+      const createBody = await createResponse.json();
+      const orderId = createBody.data.order.id;
+
+      const ipnPayload = {
+        partnerCode: "MOMO_PARTNER",
+        orderId,
+        requestId: createBody.data.payment.requestId,
+        amount: "1",
+        orderInfo: `Thanh toan don hang ${orderId}`,
+        orderType: "momo_wallet",
+        transId: "70000001",
+        resultCode: 0,
+        message: "Success",
+        payType: "qr",
+        responseTime: String(Date.now()),
+        extraData: "",
+      };
+      ipnPayload.signature = createMomoCallbackSignature(
+        ipnPayload,
+        process.env.MOMO_ACCESS_KEY,
+        process.env.MOMO_SECRET_KEY,
+      );
+
+      const ipnResponse = await fetch(
+        `http://127.0.0.1:${port}/api/orders/momo/ipn`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ipnPayload),
+        },
+      );
+      const ipnBody = await ipnResponse.json();
+
+      assert.equal(ipnResponse.status, 400);
+      assert.match(ipnBody.message, /không khớp/i);
+
+      const order = db.orders.find((item) => item.id === orderId);
+      assert.equal(order?.paymentStatus, "PENDING");
 
       removeTestOrder(orderId);
     });
@@ -1322,7 +1568,7 @@ describe("Order pricing", () => {
         partnerCode: "MOMO_PARTNER",
         orderId,
         requestId: createBody.data.payment.requestId,
-        amount: "130000",
+        amount: String(createBody.data.order.total),
         orderInfo: `Thanh toan don hang ${orderId}`,
         orderType: "momo_wallet",
         transId: "70000002",
@@ -2015,6 +2261,19 @@ describe("Order pricing", () => {
 
       assert.equal(res.status, 200);
       assert.notEqual(xiaomi.rating, ratingBefore);
+    });
+  });
+
+  test("GET /api/reviews/analysis-logs returns 403 for non-admin users", async () => {
+    await withServer(async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
+        {
+          headers: { Authorization: "Bearer demo-token" },
+        },
+      );
+
+      assert.equal(res.status, 403);
     });
   });
 });
@@ -3464,7 +3723,7 @@ describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
       const res = await fetch(
         `http://127.0.0.1:${port}/api/reviews/analysis-logs?reviewId=review-1`,
         {
-          headers: { Authorization: "Bearer demo-token" },
+          headers: { Authorization: "Bearer admin-token" },
         },
       );
 
@@ -3506,7 +3765,7 @@ describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
       const res = await fetch(
         `http://127.0.0.1:${port}/api/reviews/analysis-logs?status=failed`,
         {
-          headers: { Authorization: "Bearer demo-token" },
+          headers: { Authorization: "Bearer admin-token" },
         },
       );
 
@@ -3536,7 +3795,7 @@ describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
       const res = await fetch(
         `http://127.0.0.1:${port}/api/reviews/analysis-logs?limit=2`,
         {
-          headers: { Authorization: "Bearer demo-token" },
+          headers: { Authorization: "Bearer admin-token" },
         },
       );
 
@@ -3563,7 +3822,7 @@ describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
       const res = await fetch(
         `http://127.0.0.1:${port}/api/reviews/analysis-logs`,
         {
-          headers: { Authorization: "Bearer demo-token" },
+          headers: { Authorization: "Bearer admin-token" },
         },
       );
 
@@ -3604,7 +3863,7 @@ describe("Task 23 - AI analysis audit trail (AnalysisLog)", () => {
       const res = await fetch(
         `http://127.0.0.1:${port}/api/reviews/analysis-logs?productId=prod-iphone-15`,
         {
-          headers: { Authorization: "Bearer demo-token" },
+          headers: { Authorization: "Bearer admin-token" },
         },
       );
 

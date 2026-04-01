@@ -135,7 +135,7 @@ export default function ProductCard({ product, index = 0 }: ProductCardProps) {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  addToCart(product);
+                  void addToCart(product);
                 }}
                 className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full bg-brand text-white transition-shadow hover:shadow-lg"
                 aria-label={`Thêm ${product.name} vào giỏ hàng`}

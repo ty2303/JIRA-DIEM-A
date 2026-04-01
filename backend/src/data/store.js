@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
-import { calculateOrderPricing } from "../lib/orderPricing.js";
+import { calculateOrderPricingFromProducts } from "../lib/orderPricing.js";
 
 const now = () => new Date().toISOString();
 
@@ -292,27 +292,40 @@ export function sanitizeUser(user) {
 }
 
 export function createOrder(payload, user) {
-  for (const item of payload.items) {
-    const product = db.products.find((entry) => entry.id === item.productId);
-    if (!product) {
-      const error = new Error(`Sản phẩm "${item.productName}" không tồn tại`);
-      error.status = 404;
-      throw error;
-    }
-    if (product.stock < item.quantity) {
-      const error = new Error(
-        `Sản phẩm "${product.name}" không đủ hàng (còn ${product.stock})`,
-      );
-      error.status = 409;
-      throw error;
-    }
-  }
+	const productsById = new Map();
+	const trustedItems = payload.items.map((item) => {
+		const product = db.products.find((entry) => entry.id === item.productId);
+		if (!product) {
+			const error = new Error(`Sản phẩm "${item.productName ?? item.productId}" không tồn tại`);
+			error.status = 404;
+			throw error;
+		}
 
-  const pricing = calculateOrderPricing(payload.items, {
-    discount: payload.discount,
-  });
-  const order = {
-    id: crypto.randomUUID(),
+		if (product.stock < item.quantity) {
+			const error = new Error(
+				`Sản phẩm "${product.name}" không đủ hàng (còn ${product.stock})`,
+			);
+			error.status = 409;
+			throw error;
+		}
+
+		productsById.set(product.id, product);
+
+		return {
+			productId: product.id,
+			productName: product.name,
+			productImage: product.image ?? "",
+			brand: product.brand ?? "",
+			price: product.price,
+			quantity: item.quantity,
+		};
+	});
+
+	const pricing = calculateOrderPricingFromProducts(trustedItems, productsById, {
+		discount: 0,
+	});
+	const order = {
+		id: crypto.randomUUID(),
     userId: user?.id ?? "guest",
     email: payload.email,
     customerName: payload.customerName,
@@ -321,11 +334,11 @@ export function createOrder(payload, user) {
     city: payload.city,
     district: payload.district,
     ward: payload.ward,
-    note: payload.note ?? "",
-    paymentMethod: payload.paymentMethod,
-    status: "PENDING",
-    items: payload.items,
-    ...pricing,
+		note: payload.note ?? "",
+		paymentMethod: payload.paymentMethod,
+		status: "PENDING",
+		items: trustedItems,
+		...pricing,
     createdAt: now(),
     // MoMo orders bắt đầu ở trạng thái PENDING (chờ xác nhận từ cổng thanh toán)
     // COD orders ở trạng thái UNPAID (thanh toán khi nhận hàng)
@@ -335,10 +348,10 @@ export function createOrder(payload, user) {
     paidAt: null,
   };
 
-  for (const item of payload.items) {
-    const product = db.products.find((entry) => entry.id === item.productId);
-    if (!product) {
-      continue;
+	for (const item of trustedItems) {
+		const product = db.products.find((entry) => entry.id === item.productId);
+		if (!product) {
+			continue;
     }
     product.stock -= item.quantity;
     product.updatedAt = now();

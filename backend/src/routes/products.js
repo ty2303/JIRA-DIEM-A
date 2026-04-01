@@ -11,6 +11,10 @@ import { createReview } from "./reviews.js";
 
 export const productsRouter = express.Router();
 
+function categoryExistsInMemory(categoryId) {
+  return db.categories.some((category) => category.id === categoryId);
+}
+
 productsRouter.get("/", async (req, res) => {
   const page = Math.max(0, Number.parseInt(String(req.query.page ?? "0"), 10) || 0);
   const size = Math.max(1, Number.parseInt(String(req.query.size ?? "12"), 10) || 12);
@@ -108,6 +112,19 @@ productsRouter.post("/:id/reviews", requireAuth, async (req, res) => {
 });
 
 productsRouter.post("/", requireAdmin, async (req, res) => {
+  if (req.body.categoryId) {
+    if (!isDatabaseReady()) {
+      if (!categoryExistsInMemory(req.body.categoryId)) {
+        return res.status(400).json(fail("Danh muc khong ton tai", 400));
+      }
+    } else {
+      const category = await Category.findById(req.body.categoryId).lean();
+      if (!category) {
+        return res.status(400).json(fail("Danh muc khong ton tai", 400));
+      }
+    }
+  }
+
   if (!isDatabaseReady()) {
     const created = {
       id: `prod-${crypto.randomUUID()}`,
@@ -160,6 +177,28 @@ productsRouter.post("/batch", requireAdmin, async (req, res) => {
 
   if (items.length === 0) {
     return res.status(400).json(fail("Danh sach san pham khong hop le", 400));
+  }
+
+  const categoryIds = [...new Set(items.map((item) => item.categoryId).filter(Boolean))];
+
+  if (!isDatabaseReady()) {
+    const hasUnknownCategory = categoryIds.some(
+      (categoryId) => !categoryExistsInMemory(categoryId),
+    );
+
+    if (hasUnknownCategory) {
+      return res.status(400).json(fail("Danh muc khong ton tai", 400));
+    }
+  } else if (categoryIds.length > 0) {
+    const categories = await Category.find({ _id: { $in: categoryIds } }).lean();
+    const categorySet = new Set(categories.map((category) => category._id));
+    const hasUnknownCategory = categoryIds.some(
+      (categoryId) => !categorySet.has(categoryId),
+    );
+
+    if (hasUnknownCategory) {
+      return res.status(400).json(fail("Danh muc khong ton tai", 400));
+    }
   }
 
   if (!isDatabaseReady()) {
@@ -217,6 +256,19 @@ productsRouter.post("/batch", requireAdmin, async (req, res) => {
 });
 
 productsRouter.put("/:id", requireAdmin, async (req, res) => {
+  if (req.body.categoryId) {
+    if (!isDatabaseReady()) {
+      if (!categoryExistsInMemory(req.body.categoryId)) {
+        return res.status(400).json(fail("Danh muc khong ton tai", 400));
+      }
+    } else {
+      const category = await Category.findById(req.body.categoryId).lean();
+      if (!category) {
+        return res.status(400).json(fail("Danh muc khong ton tai", 400));
+      }
+    }
+  }
+
   if (!isDatabaseReady()) {
     const product = db.products.find((item) => item.id === req.params.id);
 

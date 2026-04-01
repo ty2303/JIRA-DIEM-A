@@ -17,10 +17,42 @@ function classifyMomoResult(resultCode) {
   return "failure";
 }
 
-async function restoreMongoStock(order) {
+export async function restoreMongoStockSafely(order) {
+  const restoredItems = [];
+
+  try {
+    for (const item of order.items) {
+      const updatedProduct = await Product.findByIdAndUpdate(
+        item.productId,
+        {
+          $inc: { stock: item.quantity },
+          updatedAt: new Date(),
+        },
+        { new: true },
+      );
+
+      if (!updatedProduct) {
+        throw new Error(`Không thể hoàn trả tồn kho cho sản phẩm ${item.productId}`);
+      }
+
+      restoredItems.push(item);
+    }
+  } catch (error) {
+    for (const item of restoredItems) {
+      await Product.findByIdAndUpdate(item.productId, {
+        $inc: { stock: -item.quantity },
+        updatedAt: new Date(),
+      });
+    }
+
+    throw error;
+  }
+}
+
+async function rollbackMongoStockRestore(order) {
   for (const item of order.items) {
     await Product.findByIdAndUpdate(item.productId, {
-      $inc: { stock: item.quantity },
+      $inc: { stock: -item.quantity },
       updatedAt: new Date(),
     });
   }
@@ -124,15 +156,30 @@ export async function applyMomoPaymentResult({ orderId, resultCode, transId = nu
     cancelReason: order.cancelReason ?? MOMO_FAILURE_REASON,
   };
 
-  const updatedOrder = source === "mongo"
-    ? await persistMongoOrder(orderId, updates)
-    : persistMemoryOrder(order, updates);
-
   if (source === "mongo") {
-    await restoreMongoStock(order);
+    await restoreMongoStockSafely(order);
+    try {
+      const updatedOrder = await persistMongoOrder(orderId, updates);
+
+      if (!updatedOrder) {
+        throw new Error("Không thể cập nhật trạng thái đơn MoMo sau khi hoàn trả tồn kho");
+      }
+
+      return {
+        handled: true,
+        changed: true,
+        order: updatedOrder,
+        paymentStatus: "FAILED",
+      };
+    } catch (error) {
+      await rollbackMongoStockRestore(order);
+      throw error;
+    }
   } else {
     restoreReservedStockForOrder(order);
   }
+
+  const updatedOrder = persistMemoryOrder(order, updates);
 
   return {
     handled: true,
@@ -186,15 +233,30 @@ export async function cancelMomoPendingOrder({ orderId, cancelReason, cancelledB
     cancelledBy,
   };
 
-  const updatedOrder = source === "mongo"
-    ? await persistMongoOrder(orderId, updates)
-    : persistMemoryOrder(order, updates);
-
   if (source === "mongo") {
-    await restoreMongoStock(order);
+    await restoreMongoStockSafely(order);
+    try {
+      const updatedOrder = await persistMongoOrder(orderId, updates);
+
+      if (!updatedOrder) {
+        throw new Error("Không thể cập nhật trạng thái hủy đơn MoMo sau khi hoàn trả tồn kho");
+      }
+
+      return {
+        handled: true,
+        changed: true,
+        reason: "cancelled",
+        order: updatedOrder,
+      };
+    } catch (error) {
+      await rollbackMongoStockRestore(order);
+      throw error;
+    }
   } else {
     restoreReservedStockForOrder(order);
   }
+
+  const updatedOrder = persistMemoryOrder(order, updates);
 
   return {
     handled: true,

@@ -136,7 +136,7 @@ export function Component() {
 
       await Promise.allSettled([
         useWishlistStore.getState().syncSession({ skipAuthRedirect: true }),
-        useCartStore.getState().fetch({ skipAuthRedirect: true }),
+        useCartStore.getState().syncSession({ skipAuthRedirect: true }),
       ]);
 
       navigate(user.role === 'ADMIN' ? '/admin' : '/');

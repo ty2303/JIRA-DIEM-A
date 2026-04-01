@@ -106,12 +106,47 @@ categoriesRouter.put("/:id", requireAdmin, async (req, res) => {
 });
 
 categoriesRouter.delete("/:id", requireAdmin, async (req, res) => {
+  const force = String(req.query.force ?? "false").toLowerCase() === "true";
+
   if (!isDatabaseReady()) {
     const index = db.categories.findIndex((item) => item.id === req.params.id);
-    if (index >= 0) {
-      db.categories.splice(index, 1);
+    if (index < 0) {
+      return res.status(404).json(fail("Khong tim thay danh muc", 404));
     }
+
+    const hasProducts = db.products.some((product) => product.categoryId === req.params.id);
+    if (hasProducts && !force) {
+      return res.status(409).json(fail("Danh muc dang co san pham, dung force=true de xoa", 409));
+    }
+
+    if (hasProducts) {
+      db.products.forEach((product) => {
+        if (product.categoryId === req.params.id) {
+          delete product.categoryId;
+          product.updatedAt = new Date().toISOString();
+        }
+      });
+    }
+
+    db.categories.splice(index, 1);
     return res.json(ok(null, "Xoa danh muc thanh cong"));
+  }
+
+  const category = await Category.findById(req.params.id).lean();
+  if (!category) {
+    return res.status(404).json(fail("Khong tim thay danh muc", 404));
+  }
+
+  const productCount = await Product.countDocuments({ categoryId: req.params.id });
+  if (productCount > 0 && !force) {
+    return res.status(409).json(fail("Danh muc dang co san pham, dung force=true de xoa", 409));
+  }
+
+  if (productCount > 0) {
+    await Product.updateMany(
+      { categoryId: req.params.id },
+      { $unset: { categoryId: "" }, $set: { updatedAt: new Date() } },
+    );
   }
 
   await Category.findByIdAndDelete(req.params.id);
